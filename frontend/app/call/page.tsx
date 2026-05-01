@@ -9,10 +9,20 @@ type Speaker = "silent" | "user" | "agent";
 const WS_BASE =
   process.env.NEXT_PUBLIC_WS_URL?.replace(/\/$/, "") ?? "ws://localhost:8000";
 
-// Average of 0-255 frequency bins below this is treated as silence.
-const VAD_SILENCE_THRESHOLD = 15;
+// Average magnitude of voice-band frequency bins (85–3000 Hz) below this is silence.
+const VAD_SILENCE_THRESHOLD = 100;
 // How long audio must stay below threshold before the state flips to silent.
 const VAD_SILENCE_DEBOUNCE_MS = 400;
+
+function voiceBandAvg(bins: Uint8Array, sampleRate: number, fftSize: number): number {
+  const binHz = sampleRate / fftSize;
+  let sum = 0, count = 0;
+  for (let i = 0; i < bins.length; i++) {
+    const freq = i * binHz;
+    if (freq >= 85 && freq <= 255) { sum += bins[i]; count++; }
+  }
+  return count > 0 ? sum / count : 0;
+}
 
 export default function CallPage() {
   const [status, setStatus] = useState<CallStatus>("idle");
@@ -21,7 +31,7 @@ export default function CallPage() {
   const [speaker, setSpeaker] = useState<Speaker>("silent");
 
   const wsRef = useRef<WebSocket | null>(null);
-  const recorderRef = useRef<MediaRecorder | null>(null);
+  const processorRef = useRef<AudioWorkletNode | null>(null);
   const streamRef = useRef<MediaStream | null>(null);
   const audioCtxRef = useRef<AudioContext | null>(null);
   const closingRef = useRef(false);
@@ -35,8 +45,8 @@ export default function CallPage() {
   }, []);
 
   const cleanup = useCallback(() => {
-    recorderRef.current?.stop();
-    recorderRef.current = null;
+    processorRef.current?.disconnect();
+    processorRef.current = null;
     streamRef.current?.getTracks().forEach((t) => t.stop());
     streamRef.current = null;
   }, []);
@@ -115,29 +125,48 @@ export default function CallPage() {
     wsRef.current = ws;
 
     ws.onopen = () => {
-      setStatus("active");
-      addLog("Connected.");
+      void (async () => {
+        setStatus("active");
+        addLog("Connected.");
 
-      // AudioContext shared between VAD and playback
-      const ctx = new AudioContext();
-      audioCtxRef.current = ctx;
-      const micSource = ctx.createMediaStreamSource(stream);
-      const analyser = ctx.createAnalyser();
-      analyser.fftSize = 512;
-      micSource.connect(analyser);
-      const freqBins = new Uint8Array(analyser.frequencyBinCount);
+        const ctx = new AudioContext({ sampleRate: 16000 });
+        audioCtxRef.current = ctx;
 
-      const recorder = new MediaRecorder(stream);
-      recorderRef.current = recorder;
+        try {
+          await ctx.audioWorklet.addModule("/audio-processor.worklet.js");
+        } catch {
+          addLog("Failed to load audio worklet.");
+          setStatus("disconnected");
+          return;
+        }
 
-      recorder.ondataavailable = (e) => {
-        if (e.data.size > 0 && ws.readyState === WebSocket.OPEN) {
-          e.data.arrayBuffer().then((buf) => ws.send(buf));
+        const micSource = ctx.createMediaStreamSource(stream);
+
+        const analyser = ctx.createAnalyser();
+        analyser.fftSize = 512;
+        micSource.connect(analyser);
+        const freqBins = new Uint8Array(analyser.frequencyBinCount);
+
+        const worklet = new AudioWorkletNode(ctx, "audio-processor");
+        processorRef.current = worklet;
+
+        worklet.port.onmessage = (e) => {
+          if (ws.readyState !== WebSocket.OPEN) return;
+
+          const float32: Float32Array = e.data;
+          const int16 = new Int16Array(float32.length);
+          for (let i = 0; i < float32.length; i++) {
+            int16[i] = Math.max(-32768, Math.min(32767, float32[i] * 32767));
+          }
+          ws.send(int16.buffer);
 
           analyser.getByteFrequencyData(freqBins);
-          const avg = freqBins.reduce((s, v) => s + v, 0) / freqBins.length;
+          const avg = voiceBandAvg(freqBins, ctx.sampleRate, analyser.fftSize);
+          console.log(freqBins);
+          console.log("VAD avg:", avg);
           const speaking = avg > VAD_SILENCE_THRESHOLD;
           ws.send(JSON.stringify({ type: "vad", speaking }));
+
           if (speaking) {
             if (silenceTimerRef.current) {
               clearTimeout(silenceTimerRef.current);
@@ -154,10 +183,10 @@ export default function CallPage() {
               if (!agentPlayingRef.current) setSpeaker("silent");
             }, VAD_SILENCE_DEBOUNCE_MS);
           }
-        }
-      };
+        };
 
-      recorder.start(100);
+        micSource.connect(worklet);
+      })();
     };
 
     ws.onmessage = (e) => {
