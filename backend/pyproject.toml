@@ -1,0 +1,10 @@
+[project]
+name = "backend"
+version = "0.1.0"
+description = "Add your description here"
+readme = "README.md"
+requires-python = ">=3.10"
+dependencies = [
+    "fastapi[standard-no-fastapi-cloud-cli]>=0.136.1",
+    "sarvamai>=0.1.28",
+]
