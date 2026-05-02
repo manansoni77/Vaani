@@ -15,6 +15,10 @@ from logger import get_logger
 
 SARVAM_API_KEY = os.getenv("SARVAM_API_KEY")
 
+# When True, audio is only forwarded to Sarvam STT while the frontend VAD reports speaking=true.
+# When False (default), all audio is forwarded and Sarvam's internal VAD handles filtering.
+VAD_GATE_STT: bool = os.getenv("VAD_GATE_STT", "0") not in ("0", "false", "no")
+
 
 @dataclass
 class CallSession:
@@ -29,8 +33,9 @@ class CallSession:
     audio_queue: asyncio.Queue = field(default_factory=asyncio.Queue)
     tts_queue: asyncio.Queue = field(default_factory=asyncio.Queue)
 
-    stt_handle: asyncio.Task | None = field(default=None, init=False)
-    tts_handle: asyncio.Task | None = field(default=None, init=False)
+    stt_handle: asyncio.Task | None = field(default=None,  init=False)
+    tts_handle: asyncio.Task | None = field(default=None,  init=False)
+    _speaking:  bool               = field(default=False, init=False)
 
     def __post_init__(self) -> None:
         sid = self.session_id
@@ -162,15 +167,17 @@ class CallSession:
         start_time_s: float | None = None
         audio_parts: list[bytes] = []
         async for msg in tts_ws:
-            self.tts_log.debug(f"msg type={type(msg).__name__}: {msg}")
             if isinstance(msg, AudioOutput):
                 chunk = base64.b64decode(msg.data.audio)
                 if start_time_s is None:
                     start_time_s = self.loop.time() - self.session_start
                 audio_parts.append(chunk)
                 await self.websocket.send_bytes(chunk)
+                self.tts_log.debug(f"audio chunk received: {len(chunk)} bytes  request_id={msg.data.request_id}")
             elif isinstance(msg, EventResponse):
-                if getattr(msg.data, "event_type", None) == "final":
+                event_type = getattr(msg.data, "event_type", None)
+                self.tts_log.debug(f"event received: {event_type}")
+                if event_type == "final":
                     break
         return audio_parts, start_time_s
 
@@ -186,7 +193,10 @@ class CallSession:
                 if message.get("bytes"):
                     chunk = message["bytes"]
                     self.audio_chunks.append(chunk)
-                    await self.audio_queue.put(chunk)
+                    if not VAD_GATE_STT or self._speaking:
+                        await self.audio_queue.put(chunk)
+                    else:
+                        self.call_log.debug("VAD gate active — audio chunk dropped")
                 elif message.get("text"):
                     self._handle_text_message(message["text"])
         except WebSocketDisconnect:
@@ -198,8 +208,9 @@ class CallSession:
         except json.JSONDecodeError as e:
             self.call_log.warning(f"bad JSON: {e!r}  raw={raw[:80]!r}")
             return
-        if vad.get("type") == "vad" and vad.get("speaking"):
-            self.call_log.debug("speaking")
+        if vad.get("type") == "vad":
+            self._speaking = bool(vad.get("speaking"))
+            self.call_log.debug(f"VAD: speaking={self._speaking}")
 
     # ------------------------------------------------------------------ shutdown
 
