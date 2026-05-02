@@ -5,14 +5,12 @@ from contextlib import asynccontextmanager
 
 from fastapi import FastAPI, WebSocket
 from fastapi.middleware.cors import CORSMiddleware
-from dotenv import load_dotenv
 
 from audio_utils import AUDIO_DIR
 from constants import LOG_ENTITIES
 from logger import get_logger, setup_logging
 from session import CallSession
 
-load_dotenv()
 
 _app_log = get_logger(LOG_ENTITIES.APP)
 
