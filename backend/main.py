@@ -12,7 +12,9 @@ from fastapi.middleware.cors import CORSMiddleware
 from sarvamai import AsyncSarvamAI, AudioOutput, EventResponse
 from dotenv import load_dotenv
 
-from llm import word_ticker
+from llm_pipeline import VoiceIntelligencePipeline, ConversationState
+from llm import LLMClient
+import uuid
 
 load_dotenv()
 
@@ -94,7 +96,17 @@ async def call(websocket: WebSocket):
     audio_queue: asyncio.Queue[bytes | None] = asyncio.Queue()
     tts_queue: asyncio.Queue[tuple[str, str] | None] = asyncio.Queue()
     transcript_parts: list[str] = []
+    llm_client = LLMClient()
+    pipeline = VoiceIntelligencePipeline(llm_client)
 
+    call_id = str(uuid.uuid4())
+
+    state = ConversationState(
+        call_id=call_id,
+        user_context={
+            "language": "en"
+        }
+    )
     # ------------------------------------------------------------------ sarvam STT
     async def sarvam_task():
         print("[sarvam] task started")
@@ -136,20 +148,21 @@ async def call(websocket: WebSocket):
                                 print(f"[sarvam] transcript: {text}  lang={lang}")
                                 transcript_parts.append(text)
                                 buf: list[str] = []
-                                async for word in word_ticker(text):
-                                    buf.append(word)
-                                    if word and word[-1] in ".?!":
-                                        sentence = " ".join(buf)
-                                        print(f"[tts] queuing sentence: {sentence!r}")
-                                        await tts_queue.put((sentence, lang))
-                                        buf = []
-                                if buf:
-                                    sentence = " ".join(buf)
-                                    print(f"[tts] queuing final fragment: {sentence!r}")
-                                    await tts_queue.put((sentence, lang))
-                        elif msg_type == "events" and data:
-                            print(f"[sarvam] event: {getattr(data, 'signal_type', data)}")
+                                if state.llm_is_speaking:
+                                   print("[SYSTEM] interrupt ignored")
+                                else:
+                                   async for chunk in pipeline.process(
+                                    user_input=text,
+                                    state=state
+                                ):
+                                    print(f"[LLM] → {chunk}")
+                                    await tts_queue.put((chunk, lang))
 
+                                if state.phase == "complete" and state.confidence_level == "red":
+                                    print("[SYSTEM] Human takeover triggered")
+                                
+
+                                
                 send = asyncio.create_task(send_audio())
                 recv = asyncio.create_task(receive_transcripts())
                 await send
