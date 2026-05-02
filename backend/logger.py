@@ -66,6 +66,8 @@ class DBHandler(logging.Handler):
 
 
 def setup_logging(print_logs: bool = True) -> None:
+    from log_broadcaster import BroadcastHandler
+
     print(f"Setting up logging — print_logs={print_logs}, DB_URL={DB_URL}")
     root = logging.getLogger("helpline")
     root.setLevel(logging.DEBUG)
@@ -77,10 +79,17 @@ def setup_logging(print_logs: bool = True) -> None:
     db_handler.setFormatter(fmt)
     root.addHandler(db_handler)
 
+    broadcast_handler = BroadcastHandler()
+    root.addHandler(broadcast_handler)
+
     if print_logs:
         console = logging.StreamHandler()
         console.setFormatter(fmt)
         root.addHandler(console)
+
+
+def get_engine():
+    return _get_engine()
 
 
 def get_logger(entity: str, session_id: str = "NA") -> logging.LoggerAdapter:
