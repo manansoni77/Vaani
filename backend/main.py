@@ -7,16 +7,31 @@ import uuid
 import wave
 from datetime import datetime, timezone
 
+from contextlib import asynccontextmanager
+
 from fastapi import FastAPI, WebSocket, WebSocketDisconnect
 from fastapi.middleware.cors import CORSMiddleware
 from sarvamai import AsyncSarvamAI, AudioOutput, EventResponse
 from dotenv import load_dotenv
 
+from constants import LOG_ENTITIES
 from llm import word_ticker
+from logger import get_logger, setup_logging
 
 load_dotenv()
 
-app = FastAPI()
+_app_log = get_logger(LOG_ENTITIES.APP)
+
+
+@asynccontextmanager
+async def lifespan(_: FastAPI):
+    print_logs = os.getenv("PRINT_LOGS", "1") not in ("0", "false", "no")
+    setup_logging(print_logs=print_logs)
+    _app_log.info("starting up")
+    yield
+
+
+app = FastAPI(lifespan=lifespan)
 
 app.add_middleware(
     CORSMiddleware,
@@ -73,7 +88,7 @@ async def mix_audio(
         )
         return result.returncode == 0
     except FileNotFoundError:
-        print("ffmpeg not found — skipping mixed audio output")
+        get_logger(LOG_ENTITIES.CALL).warning("ffmpeg not found — skipping mixed audio output")
         return False
 
 
@@ -87,6 +102,10 @@ async def call(websocket: WebSocket):
     loop = asyncio.get_running_loop()
     session_start = loop.time()
 
+    stt_log = get_logger(LOG_ENTITIES.SARVAM_STT)
+    tts_log = get_logger(LOG_ENTITIES.SARVAM_TTS)
+    call_log = get_logger(LOG_ENTITIES.CALL)
+
     audio_chunks: list[bytes] = []
     # (start_time_s relative to session_start, raw pcm bytes for that sentence)
     tts_events: list[tuple[float, bytes]] = []
@@ -96,17 +115,17 @@ async def call(websocket: WebSocket):
     transcript_parts: list[str] = []
 
     # ------------------------------------------------------------------ sarvam STT
-    async def sarvam_task():
-        print("[sarvam] task started")
+    async def stt_task():
+        stt_log.info("task started")
         if not SARVAM_API_KEY:
-            print("[sarvam] SARVAM_API_KEY not set — STT disabled")
+            stt_log.warning("SARVAM_API_KEY not set — STT disabled")
             while (await audio_queue.get()) is not None:
                 pass
             return
 
         sarvam = AsyncSarvamAI(api_subscription_key=SARVAM_API_KEY)
         try:
-            print("[sarvam] connecting...")
+            stt_log.info("connecting...")
             async with sarvam.speech_to_text_translate_streaming.connect(
                 model="saaras:v3",
                 mode="translate",
@@ -115,17 +134,17 @@ async def call(websocket: WebSocket):
                 high_vad_sensitivity=True,
                 vad_signals=True,
             ) as sarvam_ws:
-                print("[sarvam] connected")
+                stt_log.info("connected")
 
                 async def send_audio():
                     while (chunk := await audio_queue.get()) is not None:
-                        print(f"[sarvam] sending audio chunk of {len(chunk)} bytes")
+                        stt_log.debug(f"sending audio chunk of {len(chunk)} bytes")
                         b64 = base64.b64encode(chunk).decode()
                         await sarvam_ws.translate(audio=b64)
 
                 async def receive_transcripts():
                     async for message in sarvam_ws:
-                        print(f"[sarvam] received message: {message}")
+                        stt_log.debug(f"received message: {message}")
                         msg_type = getattr(message, "type", None)
                         data = getattr(message, "data", None)
 
@@ -133,22 +152,22 @@ async def call(websocket: WebSocket):
                             text = getattr(data, "transcript", None)
                             lang = getattr(data, "language_code", None) or "en-IN"
                             if text:
-                                print(f"[sarvam] transcript: {text}  lang={lang}")
+                                stt_log.info(f"transcript: {text}  lang={lang}")
                                 transcript_parts.append(text)
                                 buf: list[str] = []
                                 async for word in word_ticker(text):
                                     buf.append(word)
                                     if word and word[-1] in ".?!":
                                         sentence = " ".join(buf)
-                                        print(f"[tts] queuing sentence: {sentence!r}")
+                                        tts_log.debug(f"queuing sentence: {sentence!r}")
                                         await tts_queue.put((sentence, lang))
                                         buf = []
                                 if buf:
                                     sentence = " ".join(buf)
-                                    print(f"[tts] queuing final fragment: {sentence!r}")
+                                    tts_log.debug(f"queuing final fragment: {sentence!r}")
                                     await tts_queue.put((sentence, lang))
                         elif msg_type == "events" and data:
-                            print(f"[sarvam] event: {getattr(data, 'signal_type', data)}")
+                            stt_log.debug(f"event: {getattr(data, 'signal_type', data)}")
 
                 send = asyncio.create_task(send_audio())
                 recv = asyncio.create_task(receive_transcripts())
@@ -160,17 +179,16 @@ async def call(websocket: WebSocket):
                     pass
 
         except BaseException as e:
-            print(e.with_traceback(None))
-            print(f"[sarvam] error ({type(e).__name__}): {e!r}")
+            stt_log.error(f"error ({type(e).__name__}): {e!r}")
             while not audio_queue.empty():
                 audio_queue.get_nowait()
 
-    sarvam_handle = asyncio.create_task(sarvam_task())
+    stt_handle = asyncio.create_task(stt_task())
 
     # ------------------------------------------------------------------ sarvam TTS
     async def tts_task():
         if not SARVAM_API_KEY:
-            print("[tts] SARVAM_API_KEY not set — TTS disabled")
+            tts_log.warning("SARVAM_API_KEY not set — TTS disabled")
             while (await tts_queue.get()) is not None:
                 pass
             return
@@ -183,28 +201,28 @@ async def call(websocket: WebSocket):
                 break
             sentence, lang = item
             try:
-                print(f"[tts] connecting for: {sentence!r}  lang={lang}")
+                tts_log.info(f"connecting for: {sentence!r}  lang={lang}")
                 async with sarvam.text_to_speech_streaming.connect(
                     model="bulbul:v3", send_completion_event=True
                 ) as tts_ws:
-                    print(f"[tts] connected for: {sentence!r}")
-                    print(f"[tts] configuration: lang={lang}, speaker=anushka, codec=pcm, rate=16000")
+                    tts_log.debug(f"connected for: {sentence!r}")
+                    tts_log.debug(f"configuration: lang={lang}, speaker=shubh, codec=linear16, rate=16000")
                     await tts_ws.configure(
                         target_language_code=lang,
                         speaker="shubh",
                         output_audio_codec="linear16",
                         speech_sample_rate=16000,
                     )
-                    print(f"[tts] configuration sent for: {sentence!r}")
+                    tts_log.debug(f"configuration sent for: {sentence!r}")
                     await tts_ws.convert(sentence)
-                    print(f"[tts] convert sent for: {sentence!r}")
+                    tts_log.debug(f"convert sent for: {sentence!r}")
                     await tts_ws.flush()
-                    print(f"[tts] flush sent for: {sentence!r}")
+                    tts_log.debug(f"flush sent for: {sentence!r}")
 
                     start_time_s: float | None = None
                     audio_parts: list[bytes] = []
                     async for msg in tts_ws:
-                        print(f"[tts] msg type={type(msg).__name__}: {msg}")
+                        tts_log.debug(f"msg type={type(msg).__name__}: {msg}")
                         if isinstance(msg, AudioOutput):
                             chunk = base64.b64decode(msg.data.audio)
                             if start_time_s is None:
@@ -217,9 +235,9 @@ async def call(websocket: WebSocket):
 
                     if audio_parts and start_time_s is not None:
                         tts_events.append((start_time_s, b"".join(audio_parts)))
-                    print(f"[tts] {len(audio_parts)} chunks for: {sentence!r}")
+                    tts_log.info(f"{len(audio_parts)} chunks for: {sentence!r}")
             except Exception as e:
-                print(f"[tts] error on {sentence!r}: {e!r}")
+                tts_log.error(f"error on {sentence!r}: {e!r}")
 
     tts_handle = asyncio.create_task(tts_task())
 
@@ -228,7 +246,7 @@ async def call(websocket: WebSocket):
         while True:
             message = await websocket.receive()
             if message["type"] == "websocket.disconnect":
-                print("[call] websocket.disconnect received")
+                call_log.info("websocket.disconnect received")
                 break
             if message.get("bytes"):
                 chunk = message["bytes"]
@@ -238,41 +256,41 @@ async def call(websocket: WebSocket):
                 try:
                     vad = json.loads(message["text"])
                 except json.JSONDecodeError as e:
-                    print(f"[call] bad JSON: {e!r}  raw={message['text'][:80]!r}")
+                    call_log.warning(f"bad JSON: {e!r}  raw={message['text'][:80]!r}")
                     continue
                 if vad.get("type") == "vad" and vad.get("speaking"):
-                    print(f"[call] speaking")
+                    call_log.debug("speaking")
     except WebSocketDisconnect:
         pass
     finally:
         await audio_queue.put(None)
         try:
-            await asyncio.wait_for(sarvam_handle, timeout=10.0)
+            await asyncio.wait_for(stt_handle, timeout=10.0)
         except asyncio.TimeoutError:
-            print("[sarvam] task timed out — cancelling")
-            sarvam_handle.cancel()
+            stt_log.warning("task timed out — cancelling")
+            stt_handle.cancel()
         except BaseException as e:
-            print(f"[sarvam] task ended with error ({type(e).__name__}): {e!r}")
+            stt_log.error(f"task ended with error ({type(e).__name__}): {e!r}")
 
         await tts_queue.put(None)
         try:
             await asyncio.wait_for(tts_handle, timeout=15.0)
         except asyncio.TimeoutError:
-            print("[tts] task timed out — cancelling")
+            tts_log.warning("task timed out — cancelling")
             tts_handle.cancel()
         except BaseException as e:
-            print(f"[tts] task ended with error: {e!r}")
+            tts_log.error(f"task ended with error: {e!r}")
 
         if transcript_parts:
-            print(f"[sarvam] FULL TRANSCRIPT: {' '.join(transcript_parts)}")
+            stt_log.info(f"FULL TRANSCRIPT: {' '.join(transcript_parts)}")
         else:
-            print("[sarvam] no transcript produced")
+            stt_log.info("no transcript produced")
 
         if audio_chunks:
             timestamp = datetime.now(timezone.utc).strftime("%Y%m%d_%H%M%S_%f")
             raw_path = os.path.join(AUDIO_DIR, f"call_{session_id}_{timestamp}.wav")
             save_wav(audio_chunks, raw_path)
-            print(f"Session {session_id} raw audio saved to {raw_path}")
+            call_log.info(f"session {session_id} raw audio saved to {raw_path}")
 
             if tts_events:
                 # Save each TTS segment as a temp WAV (PCM s16le, 16 kHz), mix into the recording
@@ -287,7 +305,7 @@ async def call(websocket: WebSocket):
                 mixed_path = os.path.join(AUDIO_DIR, f"call_{session_id}_{timestamp}_mixed.wav")
                 ok = await mix_audio(raw_path, overlays, mixed_path)
                 if ok:
-                    print(f"Session {session_id} mixed audio saved to {mixed_path}")
+                    call_log.info(f"session {session_id} mixed audio saved to {mixed_path}")
 
                 for p in tmp_paths:
                     try:
