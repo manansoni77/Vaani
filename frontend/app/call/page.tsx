@@ -13,6 +13,7 @@ const WS_BASE =
 const VAD_SILENCE_THRESHOLD = 100;
 // How long audio must stay below threshold before the state flips to silent.
 const VAD_SILENCE_DEBOUNCE_MS = 400;
+const TTS_SAMPLE_RATE = 16000; // bulbul:v3 PCM output rate
 
 function voiceBandAvg(bins: Uint8Array, sampleRate: number, fftSize: number): number {
   const binHz = sampleRate / fftSize;
@@ -38,6 +39,7 @@ export default function CallPage() {
   const prevSpeakingRef = useRef(false);
   const agentPlayingRef = useRef(false);
   const silenceTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const nextPlayTimeRef = useRef(0);
 
   const addLog = useCallback((msg: string) => {
     const time = new Date().toLocaleTimeString();
@@ -65,37 +67,48 @@ export default function CallPage() {
     addLog("Call ended.");
   }, [addLog, cleanup]);
 
-  const playAudioBytes = useCallback(
-    async (data: ArrayBuffer) => {
-      try {
-        if (!audioCtxRef.current || audioCtxRef.current.state === "closed") {
-          audioCtxRef.current = new AudioContext();
-        }
-        const ctx = audioCtxRef.current;
-        if (ctx.state === "suspended") await ctx.resume();
-        const buffer = await ctx.decodeAudioData(data.slice(0));
-        const source = ctx.createBufferSource();
-        source.buffer = buffer;
-        source.connect(ctx.destination);
+  const playPcmChunk = useCallback((data: ArrayBuffer) => {
+    try {
+      const ctx = audioCtxRef.current;
+      if (!ctx || ctx.state === "closed") return;
+
+      const int16 = new Int16Array(data);
+      const float32 = new Float32Array(int16.length);
+      for (let i = 0; i < int16.length; i++) {
+        float32[i] = int16[i] / 32768;
+      }
+
+      const buffer = ctx.createBuffer(1, float32.length, TTS_SAMPLE_RATE);
+      buffer.copyToChannel(float32, 0);
+
+      const source = ctx.createBufferSource();
+      source.buffer = buffer;
+      source.connect(ctx.destination);
+
+      const startTime = Math.max(ctx.currentTime, nextPlayTimeRef.current);
+      source.start(startTime);
+      nextPlayTimeRef.current = startTime + buffer.duration;
+
+      if (!agentPlayingRef.current) {
         agentPlayingRef.current = true;
         setSpeaker("agent");
-        source.onended = () => {
+      }
+      source.onended = () => {
+        if (nextPlayTimeRef.current <= ctx.currentTime + 0.05) {
           agentPlayingRef.current = false;
           setSpeaker(prevSpeakingRef.current ? "user" : "silent");
-        };
-        source.start();
-        addLog("Beep received from server.");
-      } catch {
-        addLog("Received audio signal (could not decode).");
-      }
-    },
-    [addLog]
-  );
+        }
+      };
+    } catch (err) {
+      addLog(`PCM playback error: ${err}`);
+    }
+  }, [addLog]);
 
   const startCall = useCallback(async () => {
     closingRef.current = false;
     prevSpeakingRef.current = false;
     agentPlayingRef.current = false;
+    nextPlayTimeRef.current = 0;
     if (silenceTimerRef.current) {
       clearTimeout(silenceTimerRef.current);
       silenceTimerRef.current = null;
@@ -201,7 +214,7 @@ export default function CallPage() {
           addLog(`Server message: ${e.data}`);
         }
       } else if (e.data instanceof ArrayBuffer) {
-        playAudioBytes(e.data);
+        playPcmChunk(e.data);
       }
     };
 
@@ -214,7 +227,7 @@ export default function CallPage() {
         setStatus("disconnected");
       }
     };
-  }, [addLog, cleanup, playAudioBytes]);
+  }, [addLog, cleanup, playPcmChunk]);
 
   useEffect(() => {
     return () => {
@@ -230,7 +243,7 @@ export default function CallPage() {
   const isConnecting = status === "connecting";
 
   return (
-    <div className="min-h-screen flex flex-col items-center justify-center bg-gradient-to-br from-blue-50 to-indigo-100 dark:from-slate-900 dark:to-slate-800 p-4">
+    <div className="min-h-screen flex flex-col items-center justify-center bg-linear-to-br from-blue-50 to-indigo-100 dark:from-slate-900 dark:to-slate-800 p-4">
       <div className="flex flex-col items-center gap-6 w-full max-w-lg">
         <div className="text-center">
           <h1 className="text-4xl font-bold text-slate-900 dark:text-white mb-2">
