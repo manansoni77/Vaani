@@ -1,4 +1,5 @@
 import asyncio
+import base64
 import io
 import json
 import math
@@ -9,8 +10,12 @@ import uuid
 import wave
 from datetime import datetime, timezone
 
-from fastapi import FastAPI, WebSocket, WebSocketDisconnect
+from fastapi import FastAPI, Request, WebSocket, WebSocketDisconnect
 from fastapi.middleware.cors import CORSMiddleware
+from sarvamai import AsyncSarvamAI
+from dotenv import load_dotenv
+
+load_dotenv()  # Load environment variables from .env file
 
 app = FastAPI()
 
@@ -25,6 +30,9 @@ AUDIO_DIR = "audio"
 os.makedirs(AUDIO_DIR, exist_ok=True)
 
 SILENCE_THRESHOLD = 2.0  # seconds
+PCM_SAMPLE_RATE = 16000  # Hz — must match AudioContext sampleRate on the frontend
+
+SARVAM_API_KEY = os.getenv("SARVAM_API_KEY")
 
 
 def generate_beep(
@@ -51,10 +59,19 @@ def generate_beep(
 
 BEEP_AUDIO = generate_beep()
 
-# Write beep to disk once so ffmpeg can reference it
 BEEP_WAV_PATH = os.path.join(AUDIO_DIR, "_beep.wav")
 with open(BEEP_WAV_PATH, "wb") as _f:
     _f.write(BEEP_AUDIO)
+
+
+def save_wav(chunks: list[bytes], path: str) -> None:
+    """Write raw PCM s16le mono chunks to a WAV file."""
+    with wave.open(path, "wb") as w:
+        w.setnchannels(1)
+        w.setsampwidth(2)
+        w.setframerate(PCM_SAMPLE_RATE)
+        for chunk in chunks:
+            w.writeframes(chunk)
 
 
 async def mix_beeps_into_audio(
@@ -101,10 +118,77 @@ async def call(websocket: WebSocket):
     loop = asyncio.get_running_loop()
     session_start = loop.time()
     last_speaking_time = session_start
-    last_beep_time = 0.0  # epoch; last_speaking_time always > 0 initially
+    last_beep_time = 0.0
     audio_chunks: list[bytes] = []
-    beep_events: list[float] = []  # seconds from session_start for each beep sent
+    beep_events: list[float] = []
 
+    # PCM chunks are pushed here by the receive loop and consumed by sarvam_task.
+    audio_queue: asyncio.Queue[bytes | None] = asyncio.Queue()
+    transcript_parts: list[str] = []
+
+    # ------------------------------------------------------------------ sarvam
+    async def sarvam_task():
+        print("[sarvam] task started")
+        if not SARVAM_API_KEY:
+            print("[sarvam] SARVAM_API_KEY not set — translation disabled")
+            while (chunk := await audio_queue.get()) is not None:
+                pass
+            return
+
+        sarvam = AsyncSarvamAI(api_subscription_key=SARVAM_API_KEY)
+        try:
+            print("[sarvam] connecting...")
+            async with sarvam.speech_to_text_translate_streaming.connect(
+                model="saaras:v3",
+                mode="translate",
+                sample_rate=str(PCM_SAMPLE_RATE),
+                input_audio_codec="pcm_s16le",
+                high_vad_sensitivity=True,
+                vad_signals=True,
+            ) as sarvam_ws:
+                print("[sarvam] connected")
+
+                async def send_audio():
+                    while (chunk := await audio_queue.get()) is not None:
+                        print(f"[sarvam] sending audio chunk of {len(chunk)} bytes")
+                        b64 = base64.b64encode(chunk).decode()
+                        await sarvam_ws.translate(audio=b64)
+
+                async def receive_transcripts():
+                    async for message in sarvam_ws:
+                        print(f"[sarvam] received message: {message}")
+                        msg_type = getattr(message, "type", None)
+                        data = getattr(message, "data", None)
+
+                        if msg_type == "data" and data:
+                            text = getattr(data, "transcript", None)
+                            if text:
+                                print(f"[sarvam] transcript: {text}")
+                                transcript_parts.append(text)
+                            if lang := getattr(data, "language_code", None):
+                                print(f"[sarvam] detected language: {lang}")
+                        elif msg_type == "events" and data:
+                            print(f"[sarvam] event: {getattr(data, 'signal_type', data)}")
+
+                send = asyncio.create_task(send_audio())
+                recv = asyncio.create_task(receive_transcripts())
+                await send
+                recv.cancel()
+                try:
+                    print("receiver task is finished")
+                    await recv
+                except asyncio.CancelledError:
+                    pass
+
+        except BaseException as e:
+            print(e.with_traceback(None))
+            print(f"[sarvam] error ({type(e).__name__}): {e!r}")
+            while not audio_queue.empty():
+                audio_queue.get_nowait()
+
+    sarvam_handle = asyncio.create_task(sarvam_task())
+
+    # --------------------------------------------------------------- watcher
     async def silence_watcher():
         nonlocal last_beep_time
         poll = 0
@@ -114,7 +198,7 @@ async def call(websocket: WebSocket):
             silence_s = now - last_speaking_time
             spoke_since_beep = last_speaking_time > last_beep_time
             poll += 1
-            if poll % 20 == 0:  # every ~2 s
+            if poll % 20 == 0:
                 print(
                     f"[watcher] silence={silence_s:.1f}s  "
                     f"spoke_since_beep={spoke_since_beep}  "
@@ -133,6 +217,7 @@ async def call(websocket: WebSocket):
 
     watcher = asyncio.create_task(silence_watcher())
 
+    # ----------------------------------------------------------- receive loop
     try:
         while True:
             message = await websocket.receive()
@@ -140,7 +225,9 @@ async def call(websocket: WebSocket):
                 print("[call] websocket.disconnect received")
                 break
             if message.get("bytes"):
-                audio_chunks.append(message["bytes"])
+                chunk = message["bytes"]
+                audio_chunks.append(chunk)
+                await audio_queue.put(chunk)
             elif message.get("text"):
                 try:
                     vad = json.loads(message["text"])
@@ -157,17 +244,31 @@ async def call(websocket: WebSocket):
         pass
     finally:
         watcher.cancel()
+
+        # Signal Sarvam task to finish and wait for it (10 s hard cap)
+        await audio_queue.put(None)
+        try:
+            await asyncio.wait_for(sarvam_handle, timeout=10.0)
+        except asyncio.TimeoutError:
+            print("[sarvam] task timed out — cancelling")
+            sarvam_handle.cancel()
+        except BaseException as e:
+            print(f"[sarvam] task ended with error ({type(e).__name__}): {e!r}")
+
+        if transcript_parts:
+            print(f"[sarvam] FULL TRANSCRIPT: {' '.join(transcript_parts)}")
+        else:
+            print("[sarvam] no transcript produced")
+
         if audio_chunks:
             timestamp = datetime.now(timezone.utc).strftime("%Y%m%d_%H%M%S_%f")
-            raw_path = os.path.join(AUDIO_DIR, f"call_{session_id}_{timestamp}.webm")
-            with open(raw_path, "wb") as f:
-                for chunk in audio_chunks:
-                    f.write(chunk)
+            raw_path = os.path.join(AUDIO_DIR, f"call_{session_id}_{timestamp}.wav")
+            save_wav(audio_chunks, raw_path)
             print(f"Session {session_id} raw audio saved to {raw_path}")
 
             if beep_events:
                 mixed_path = os.path.join(
-                    AUDIO_DIR, f"call_{session_id}_{timestamp}_mixed.webm"
+                    AUDIO_DIR, f"call_{session_id}_{timestamp}_mixed.wav"
                 )
                 ok = await mix_beeps_into_audio(raw_path, beep_events, mixed_path)
                 if ok:
