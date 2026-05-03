@@ -9,6 +9,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from audio_utils import AUDIO_DIR
 from constants import LOG_ENTITIES
 from logger import get_logger, setup_logging
+from logs_router import router as logs_router
 from session import CallSession
 
 
@@ -33,6 +34,8 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
+app.include_router(logs_router)
 
 
 @app.websocket("/call")
