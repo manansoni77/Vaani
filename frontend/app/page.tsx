@@ -25,13 +25,13 @@ export default function Home() {
             className="flex items-center justify-center px-6 py-4 bg-green-600 hover:bg-green-700 text-white font-semibold rounded-lg transition-colors shadow-md hover:shadow-lg"
           >
             📊 Dashboard
-          </Link>
+          </Link> */}
           <Link
             href="/audit"
             className="flex items-center justify-center px-6 py-4 bg-purple-600 hover:bg-purple-700 text-white font-semibold rounded-lg transition-colors shadow-md hover:shadow-lg"
           >
             📋 Audit Logs
-          </Link> */}
+          </Link>
         </div>
       </div>
     </div>
