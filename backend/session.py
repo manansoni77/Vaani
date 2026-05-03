@@ -10,7 +10,8 @@ from sarvamai import AsyncSarvamAI, AudioOutput, EventResponse
 
 from audio_utils import AUDIO_DIR, PCM_SAMPLE_RATE, mix_audio, save_wav
 from constants import LOG_ENTITIES
-from llm import word_ticker
+from llm_pipeline import VoiceIntelligencePipeline, ConversationState
+from llm import LLMClient
 from logger import get_logger
 
 SARVAM_API_KEY = os.getenv("SARVAM_API_KEY")
@@ -26,6 +27,7 @@ class CallSession:
     websocket: WebSocket
     loop: asyncio.AbstractEventLoop
     session_start: float
+    conversationState: ConversationState
 
     audio_chunks: list[bytes] = field(default_factory=list)
     tts_events: list[tuple[float, bytes]] = field(default_factory=list)
@@ -107,8 +109,11 @@ class CallSession:
         await self._queue_tts_sentences(text, lang)
 
     async def _queue_tts_sentences(self, text: str, lang: str) -> None:
+        llmClient = LLMClient()
+        pipeline = VoiceIntelligencePipeline(llmClient)
+
         buf: list[str] = []
-        async for word in word_ticker(text):
+        async for word in pipeline.process(text, self.conversationState):
             buf.append(word)
             if word and word[-1] in ".?!":
                 sentence = " ".join(buf)
