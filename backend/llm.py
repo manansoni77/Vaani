@@ -56,7 +56,6 @@ class LLMClient:
             }
 
         try:
-            import json
             return json.loads(content)
         except Exception:
             return {
