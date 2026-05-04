@@ -9,7 +9,7 @@ from fastapi.middleware.cors import CORSMiddleware
 import uuid
 from audio_utils import AUDIO_DIR
 from constants import LOG_ENTITIES
-from llm_pipeline import ConversationState
+# from llm_pipeline import ConversationState
 from logger import get_logger, setup_logging
 from logs_router import router as logs_router
 from session import CallSession
@@ -47,7 +47,7 @@ async def call(websocket: WebSocket):
     session_id = str(uuid.uuid4())
     await websocket.send_json({"type": "metadata", "session_id": session_id})
 
-    conversationState = ConversationState(call_id=session_id)
+    # conversationState = ConversationState(call_id=session_id)
     loop = asyncio.get_running_loop()
     
     session = CallSession(
@@ -55,6 +55,6 @@ async def call(websocket: WebSocket):
         websocket=websocket,
         loop=loop,
         session_start=loop.time(),
-        conversationState=conversationState
+        # conversationState=conversationState
     )
     await session.run()
