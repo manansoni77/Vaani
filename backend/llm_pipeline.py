@@ -1,329 +1,473 @@
+"""
+1092 Voice Intelligence Pipeline
+Phase-controlled conversational engine with LLM-based confidence scoring
+"""
+
+import json
 import asyncio
-from typing import AsyncGenerator, Optional, Dict, Any
+from typing import AsyncGenerator, Optional, Dict, List
 from dataclasses import dataclass, field
+from enum import Enum
 from datetime import datetime
 
 
-# =============================================================================
-# SEMANTIC MEMORY
-# =============================================================================
+# ============================================================================
+# ENUMS
+# ============================================================================
+
+class Phase(Enum):
+    GREETING   = "greeting"
+    CAPTURE    = "capture"
+    VALIDATION = "validation"
+    DECISION   = "decision"
+    COMPLETE   = "complete"
+
+
+class ConfidenceLevel(Enum):
+    RED    = "RED"     # Handoff required
+    YELLOW = "YELLOW"  # Optional human review
+    GREEN  = "GREEN"   # Safe to complete autonomously
+
+
+# ============================================================================
+# MEMORY
+# ============================================================================
+
+@dataclass
+class StructuredMemory:
+    """Hard-typed fields the LLM must fill during CAPTURE."""
+    location:           Optional[str]   = None
+    issue_type:         Optional[str]   = None
+    urgency_level:      Optional[float] = None   # 0.0–1.0
+    caller_name:        Optional[str]   = None
+    contact_details:    Optional[str]   = None
+    additional_context: Optional[str]   = None
+    human_requested:    bool            = False
+
+    def get_missing_fields(self) -> List[str]:
+        missing = []
+        if not self.location:    missing.append("location")
+        if not self.issue_type:  missing.append("issue_type")
+        if self.urgency_level is None: missing.append("urgency_level")
+        return missing
+
+    def is_complete(self) -> bool:
+        return len(self.get_missing_fields()) == 0
+
+    def to_dict(self) -> Dict:
+        return {
+            "location":           self.location,
+            "issue_type":         self.issue_type,
+            "urgency_level":      self.urgency_level,
+            "caller_name":        self.caller_name,
+            "contact_details":    self.contact_details,
+            "additional_context": self.additional_context,
+            "human_requested":    self.human_requested,
+        }
+
 
 @dataclass
 class SemanticMemory:
-    summary: str = ""
-    key_details: Dict[str, Any] = field(default_factory=dict)
-    intent: str = ""
-
-    missing_info: list = field(default_factory=list)
-    urgency_hint: float = 0.0
-    has_contradictions: bool = False
-
-    human_requested: bool = False
+    """
+    Rolling LLM-generated summary of the conversation.
+    Prevents every call from hitting a human by preserving context
+    across turns so the confidence scorer has rich signal.
+    """
+    summary:           str   = ""
+    inferred_intent:   str   = ""
+    contradictions:    List  = field(default_factory=list)
+    sentiment:         str   = "neutral"   # calm | anxious | angry | neutral
+    language_code:     str   = "en-IN"
 
     def update(self, extracted: Dict):
-        if not extracted:
-            return
+        if extracted.get("summary"):         self.summary         = extracted["summary"]
+        if extracted.get("inferred_intent"): self.inferred_intent = extracted["inferred_intent"]
+        if extracted.get("contradictions"):  self.contradictions  = extracted["contradictions"]
+        if extracted.get("sentiment"):       self.sentiment       = extracted["sentiment"]
+        if extracted.get("language_code"):   self.language_code   = extracted["language_code"]
 
-        if extracted.get("summary"):
-            self.summary = extracted["summary"]
-
-        if extracted.get("key_details"):
-            self.key_details.update(extracted["key_details"])
-
-        if extracted.get("intent"):
-            self.intent = extracted["intent"]
-
-        if extracted.get("missing_info") is not None:
-            self.missing_info = extracted.get("missing_info", [])
-
-        if extracted.get("urgency_hint") is not None:
-            self.urgency_hint = max(self.urgency_hint, extracted.get("urgency_hint", 0.0))
-
-        if extracted.get("contradicts"):
-            self.has_contradictions = True
-
-        if extracted.get("human_requested"):
-            self.human_requested = True
+    def to_dict(self) -> Dict:
+        return {
+            "summary":         self.summary,
+            "inferred_intent": self.inferred_intent,
+            "contradictions":  self.contradictions,
+            "sentiment":       self.sentiment,
+            "language_code":   self.language_code,
+        }
 
 
-# =============================================================================
+# ============================================================================
 # STATE
-# =============================================================================
+# ============================================================================
 
 @dataclass
 class ConversationState:
-    call_id: str
+    call_id:      str
     user_context: Dict = field(default_factory=dict)
 
-    phase: str = "greeting"
-    turn_count: int = 0
+    phase:     Phase = Phase.GREETING
+    turn_count: int  = 0
+    max_turns:  int  = 3
 
-    memory: SemanticMemory = field(default_factory=SemanticMemory)
+    structured_memory:    StructuredMemory = field(default_factory=StructuredMemory)
+    semantic_memory:      SemanticMemory   = field(default_factory=SemanticMemory)
+    conversation_history: List[Dict]       = field(default_factory=list)
 
-    confidence: float = 0.0
-    confidence_level: str = "red"
+    # Confidence — LLM-assigned string levels, not floats
+    confidence_after_capture:     Optional[ConfidenceLevel] = None
+    confidence_after_validation:  Optional[ConfidenceLevel] = None
+    confidence_reasoning:         str = ""
 
-    llm_is_speaking: bool = False
-    user_confirmed: bool = False
-    validation_done: bool = False
+    user_corrected: bool = False
+    validation_response: str = ""
 
-    messages: list = field(default_factory=list)
+    start_time:  str = field(default_factory=lambda: datetime.now().isoformat())
 
     def add_turn(self, role: str, content: str):
-        self.messages.append({
-            "role": role,
-            "content": content,
-            "timestamp": datetime.now().isoformat()
+        self.conversation_history.append({
+            "role":      role,
+            "content":   content,
+            "timestamp": datetime.now().isoformat(),
         })
 
+    def to_dict(self) -> Dict:
+        return {
+            "call_id":    self.call_id,
+            "phase":      self.phase.value,
+            "turn_count": self.turn_count,
+            "confidence_after_capture":    self.confidence_after_capture.value  if self.confidence_after_capture    else None,
+            "confidence_after_validation": self.confidence_after_validation.value if self.confidence_after_validation else None,
+            "confidence_reasoning": self.confidence_reasoning,
+            "structured_memory":    self.structured_memory.to_dict(),
+            "semantic_memory":      self.semantic_memory.to_dict(),
+        }
 
-# =============================================================================
+
+# ============================================================================
 # PIPELINE
-# =============================================================================
+# ============================================================================
 
 class VoiceIntelligencePipeline:
+    """
+    Phase-controlled LLM pipeline.
+    Caller (main.py / orchestrator) is responsible for NOT calling this
+    while a previous stream is still yielding — no internal lock needed.
+    """
 
-    def __init__(self, llm, logger=None):
-        self.llm = llm
+    def __init__(self, llm_client, logger=None):
+        self.llm    = llm_client
         self.logger = logger
 
-    def _log(self, msg: str):
+    def _log(self, msg: str, level: str = "INFO"):
         if self.logger:
-            self.logger.info(msg)
-        print(f"[Pipeline] {msg}")
+            self.logger.log(level, msg)
+        print(f"[{level}][Pipeline] {msg}")
 
-    # =========================================================================
-    # MAIN
-    # =========================================================================
+    # ------------------------------------------------------------------ public
 
-    async def process(self, user_input: str, state: ConversationState) -> AsyncGenerator[str, None]:
+    async def handle_greeting(
+        self, state: ConversationState
+    ) -> AsyncGenerator[str, None]:
+        """Phase GREETING — called once, no user input needed."""
+        self._log(f"[{state.call_id}] GREETING")
 
-        if state.llm_is_speaking:
+        language = state.user_context.get("language", "English")
+        region   = state.user_context.get("state", "Karnataka")
+        name     = state.user_context.get("name", "")
+
+        prompt = f"""You are a calm, empathetic AI assistant for the 1092 Citizen Helpline in {region}.
+Greet the caller{' named ' + name if name else ''} warmly in {language}.
+Ask them to briefly describe their concern.
+Keep it under 2 sentences. Do not ask multiple questions."""
+
+        async for chunk in self._stream(prompt, state):
+            yield chunk
+
+        state.phase = Phase.CAPTURE
+
+    async def handle_capture(
+        self, state: ConversationState, user_input: str
+    ) -> AsyncGenerator[str, None]:
+        """Phase CAPTURE — up to max_turns turns of info gathering."""
+        state.turn_count += 1
+        self._log(f"[{state.call_id}] CAPTURE turn {state.turn_count}/{state.max_turns}")
+
+        state.add_turn("user", user_input)
+
+        # Extract structured + semantic info
+        extracted = await self._extract(user_input, state)
+        self._update_memories(state, extracted)
+
+        # Exit conditions → VALIDATION
+        if state.structured_memory.is_complete() or state.turn_count >= state.max_turns:
+            self._log(f"[{state.call_id}] CAPTURE done → VALIDATION")
+            state.phase = Phase.VALIDATION
             return
 
-        state.llm_is_speaking = True
-        state.turn_count += 1
+        # Ask for next missing field
+        missing = state.structured_memory.get_missing_fields()
+        prompt = f"""You are helping a citizen on the 1092 Helpline.
 
-        try:
-            # ---------- FIRST TURN ----------
-            if state.turn_count == 1:
+Gathered so far:
+{json.dumps(state.structured_memory.to_dict(), indent=2)}
 
-                extracted = await self._smart_extract(user_input, state)
-                state.memory.update(extracted)
-                state.add_turn("user", user_input)
+Semantic context:
+{json.dumps(state.semantic_memory.to_dict(), indent=2)}
 
-                response = await self._gen_greeting_with_context(state, extracted)
+Missing: {', '.join(missing)}
 
-                async for chunk in self._stream_text(response):
-                    yield chunk
+The caller just said: "{user_input}"
 
-                state.phase = "collecting"
-                state.llm_is_speaking = False
-                return
+Ask a single, natural follow-up question to get the next missing piece.
+1–2 sentences. No lists. Match the caller's language/tone."""
 
-            # ---------- NORMAL FLOW ----------
-            state.add_turn("user", user_input)
+        async for chunk in self._stream(prompt, state):
+            yield chunk
 
-            extracted = await self._smart_extract(user_input, state)
-            state.memory.update(extracted)
+    async def handle_validation(
+        self, state: ConversationState
+    ) -> AsyncGenerator[str, None]:
+        """Phase VALIDATION — read back structured facts, ask for confirmation."""
+        self._log(f"[{state.call_id}] VALIDATION")
 
-            # ---------- VALIDATION RESPONSE ----------
-            if state.validation_done:
+        mem = state.structured_memory.to_dict()
+        sem = state.semantic_memory.to_dict()
 
-                if self._is_confirmation(user_input):
-                    state.user_confirmed = True
+        prompt = f"""You are confirming a citizen's report on the 1092 Helpline.
 
-                await self._compute_final_confidence(state)
+Structured facts:
+{json.dumps(mem, indent=2)}
 
-                final = self._gen_final_response(state)
+Semantic summary: {sem['summary']}
 
-                yield final
+Generate ONE concise confirmation sentence:
+"Let me confirm: [issue] at [location], urgency [level]. Is this correct?"
 
-                state.phase = "complete"
-                state.llm_is_speaking = False
-                return
+Use only the structured facts. Do not invent details."""
 
-            # ---------- TRIGGER VALIDATION ----------
-            if self._should_validate(state):
+        full = ""
+        async for chunk in self._stream(prompt, state):
+            full += chunk
+            yield chunk
 
-                state.confidence = self._compute_confidence_1(state)
+        state.validation_response = full
+        state.phase = Phase.DECISION
 
-                validation = self._gen_validation(state.memory)
+    async def handle_decision(
+        self, state: ConversationState, user_input: str
+    ) -> AsyncGenerator[str, None]:
+        """Phase DECISION — process confirmation, score confidence, route."""
+        self._log(f"[{state.call_id}] DECISION")
 
-                yield validation
+        state.add_turn("user", user_input)
+        state.user_corrected = self._is_correction(user_input)
 
-                state.validation_done = True
-                state.phase = "validating"
-                state.llm_is_speaking = False
-                return
+        # LLM-based confidence scoring
+        level, reasoning = await self._score_confidence(state)
+        state.confidence_after_validation = level
+        state.confidence_reasoning        = reasoning
+        self._log(f"[{state.call_id}] Confidence={level.value} | {reasoning}")
 
-            # ---------- FOLLOWUP ----------
-            if extracted.get("contradicts"):
-                response = await self._gen_clarification(state)
-            else:
-                response = await self._gen_followup(state)
+        # Override: human explicitly requested
+        if state.structured_memory.human_requested:
+            level = ConfidenceLevel.RED
 
-            async for chunk in self._stream_text(response):
-                yield chunk
+        # Override: very high urgency always gets a human
+        urgency = state.structured_memory.urgency_level or 0.0
+        if urgency >= 0.85:
+            level = ConfidenceLevel.RED
 
-            state.llm_is_speaking = False
+        state.confidence_after_validation = level
 
-        except Exception as e:
-            self._log(f"Error: {e}")
-            state.llm_is_speaking = False
-            raise
+        if level == ConfidenceLevel.RED:
+            yield "Connecting you to a human agent right away. Please hold."
+        elif level == ConfidenceLevel.YELLOW:
+            yield "We have noted your concern. Our team will review it and reach out shortly."
+        else:
+            yield "Your request has been recorded and help is being arranged. Thank you for calling 1092."
 
-    # =========================================================================
-    # EXTRACTION
-    # =========================================================================
+        state.phase = Phase.COMPLETE
 
-    async def _smart_extract(self, user_input: str, state: ConversationState) -> Dict:
+    # ------------------------------------------------------------------ private
 
-        context = state.memory.summary or "No prior context"
+    async def _extract(self, user_input: str, state: ConversationState) -> Dict:
+        """Extract structured + semantic info in one LLM call."""
+        prompt = f"""Extract information from the caller's statement for the 1092 Helpline.
 
-        prompt = f"""
-Extract structured info from user input.
+Previous summary: {state.semantic_memory.summary or 'None'}
+Current structured memory: {json.dumps(state.structured_memory.to_dict())}
 
-Context: {context}
+Caller said: "{user_input}"
 
-User: "{user_input}"
-
-Return JSON:
+Return ONLY valid JSON (no markdown):
 {{
-  "summary": "...",
-  "key_details": {{}},
-  "intent": "...",
-  "missing_info": [],
-  "urgency_hint": 0.0,
-  "contradicts": false,
-  "human_requested": false
+  "location":           "string or null",
+  "issue_type":         "string or null",
+  "urgency_level":      0.0,
+  "caller_name":        "string or null",
+  "contact_details":    "string or null",
+  "additional_context": "string or null",
+  "human_requested":    false,
+  "summary":            "1-sentence running summary of entire conversation",
+  "inferred_intent":    "what the caller ultimately wants",
+  "contradictions":     [],
+  "sentiment":          "calm|anxious|angry|neutral",
+  "language_code":      "e.g. en-IN, hi-IN"
 }}
-"""
+
+Be strict — only extract explicitly stated information."""
 
         return await self.llm.get_json_response(prompt)
 
-    # =========================================================================
-    # LOGIC
-    # =========================================================================
+    def _update_memories(self, state: ConversationState, extracted: Dict):
+        sm = state.structured_memory
+        if extracted.get("location"):           sm.location           = extracted["location"]
+        if extracted.get("issue_type"):         sm.issue_type         = extracted["issue_type"]
+        if extracted.get("urgency_level") is not None:
+            sm.urgency_level = extracted["urgency_level"]
+        if extracted.get("caller_name"):        sm.caller_name        = extracted["caller_name"]
+        if extracted.get("contact_details"):    sm.contact_details    = extracted["contact_details"]
+        if extracted.get("additional_context"): sm.additional_context = extracted["additional_context"]
+        if extracted.get("human_requested"):    sm.human_requested    = True
+        state.semantic_memory.update(extracted)
 
-    def _should_validate(self, state: ConversationState) -> bool:
+    async def _score_confidence(
+        self, state: ConversationState
+    ) -> tuple[ConfidenceLevel, str]:
+        """
+        LLM judges confidence based on:
+        - Completeness of structured memory
+        - Semantic coherence (contradictions, sentiment)
+        - Whether user confirmed or corrected
+        - Turn count efficiency
+        Returns ConfidenceLevel + reasoning string.
+        """
+        prompt = f"""You are the confidence scoring engine for the 1092 Citizen Helpline AI.
 
-        if state.turn_count >= 3:
-            return True
+Evaluate the following conversation state and decide the confidence level.
 
-        has_summary = bool(state.memory.summary)
-        has_details = bool(state.memory.key_details)
+Structured memory:
+{json.dumps(state.structured_memory.to_dict(), indent=2)}
 
-        return has_summary and has_details and not state.memory.missing_info
+Semantic memory:
+{json.dumps(state.semantic_memory.to_dict(), indent=2)}
 
-    def _is_confirmation(self, text: str) -> bool:
+User corrected the AI during validation: {state.user_corrected}
+Turns used: {state.turn_count} out of {state.max_turns}
+Validation statement shown to user: "{state.validation_response}"
 
+Scoring rules (apply ALL of them):
+1. If human_requested is true → RED regardless of anything else.
+2. If urgency_level >= 0.85 → RED (life/safety situation).
+3. If user_corrected is true → penalise heavily (lean RED or YELLOW).
+4. If any required field (location, issue_type, urgency_level) is null → RED.
+5. If contradictions list is non-empty → YELLOW or RED.
+6. If sentiment is "angry" → YELLOW (human may de-escalate better).
+7. If all required fields are filled, no contradictions, user confirmed → GREEN.
+8. Partial info with plausible context → YELLOW.
+
+Return ONLY valid JSON:
+{{
+  "confidence_level": "RED|YELLOW|GREEN",
+  "reasoning": "one sentence explaining the decision"
+}}"""
+
+        try:
+            result = await self.llm.get_json_response(prompt)
+            level_str = result.get("confidence_level", "RED").upper()
+            level = ConfidenceLevel[level_str] if level_str in ConfidenceLevel.__members__ else ConfidenceLevel.RED
+            return level, result.get("reasoning", "")
+        except Exception as e:
+            self._log(f"Confidence scoring error: {e}", "ERROR")
+            return ConfidenceLevel.RED, "Scoring failed — defaulting to RED"
+
+    async def _stream(
+        self, prompt: str, state: ConversationState
+    ) -> AsyncGenerator[str, None]:
+        full = ""
+        async for chunk in self.llm.stream_completion(
+            prompt=prompt,
+            system_message="You are a helpful assistant for the 1092 Citizen Helpline. Be concise, empathetic, and clear.",
+            temperature=0.6,
+            max_tokens=150,
+        ):
+            full += chunk
+            yield chunk
+        state.add_turn("assistant", full)
+
+    @staticmethod
+    def _is_correction(text: str) -> bool:
         text = text.lower()
-
-        if any(x in text for x in ["no", "wrong", "incorrect"]):
-            return False
-
-        if any(x in text for x in ["yes", "correct", "right"]):
+        if any(w in text for w in ["no", "wrong", "incorrect", "not right", "that's not"]):
             return True
-
         return False
 
-    # =========================================================================
-    # CONFIDENCE
-    # =========================================================================
 
-    def _compute_confidence_1(self, state: ConversationState) -> float:
+# ============================================================================
+# ORCHESTRATOR  (single entry point for main.py)
+# ============================================================================
 
-        score = 0.0
+class ConversationOrchestrator:
+    """
+    Routes user input to the correct phase handler.
+    main.py should call process_turn() for every user utterance.
+    Greeting is triggered automatically on first call with user_input=None.
+    """
 
-        if state.memory.summary:
-            score += 0.2
-        if state.memory.intent:
-            score += 0.2
+    def __init__(self, pipeline: VoiceIntelligencePipeline):
+        self.pipeline     = pipeline
+        self.active_calls: Dict[str, ConversationState] = {}
 
-        score += min(0.3, len(state.memory.key_details) * 0.1)
+    def get_or_create_state(
+        self, call_id: str, user_context: Optional[Dict] = None
+    ) -> ConversationState:
+        if call_id not in self.active_calls:
+            self.active_calls[call_id] = ConversationState(
+                call_id=call_id,
+                user_context=user_context or {},
+            )
+        return self.active_calls[call_id]
 
-        score -= len(state.memory.missing_info) * 0.05
-        score += state.memory.urgency_hint * 0.2
+    async def process_turn(
+        self,
+        call_id: str,
+        user_input: Optional[str],
+        state: Optional[ConversationState] = None,
+    ) -> AsyncGenerator[str, None]:
+        """
+        Main entry point.
+        Pass user_input=None to trigger the greeting (first turn).
+        """
+        if state is None:
+            state = self.active_calls.get(call_id)
+        if state is None:
+            raise ValueError(f"Unknown call_id: {call_id}")
 
-        if state.memory.has_contradictions:
-            score -= 0.2
+        if state.phase == Phase.GREETING:
+            async for chunk in self.pipeline.handle_greeting(state):
+                yield chunk
 
-        return max(0.0, min(1.0, score))
+        elif state.phase == Phase.CAPTURE:
+            if not user_input:
+                return
+            async for chunk in self.pipeline.handle_capture(state, user_input):
+                yield chunk
 
-    async def _compute_final_confidence(self, state: ConversationState):
+            # Auto-transition into validation if capture exited
+            if state.phase == Phase.VALIDATION:
+                # Compute capture-phase confidence snapshot (informational)
+                level, reasoning = await self.pipeline._score_confidence(state)
+                state.confidence_after_capture = level
+                self.pipeline._log(f"[{call_id}] Capture confidence={level.value}")
 
-        base = self._compute_confidence_1(state)
+                async for chunk in self.pipeline.handle_validation(state):
+                    yield chunk
 
-        if state.user_confirmed:
-            final = base + 0.2
-        else:
-            final = base - 0.4
+        elif state.phase == Phase.DECISION:
+            if not user_input:
+                return
+            async for chunk in self.pipeline.handle_decision(state, user_input):
+                yield chunk
 
-        state.confidence = max(0.0, min(1.0, final))
-
-        if state.memory.human_requested or state.confidence < 0.4:
-            state.confidence_level = "red"
-        elif state.confidence < 0.7:
-            state.confidence_level = "yellow"
-        else:
-            state.confidence_level = "green"
-
-    # =========================================================================
-    # RESPONSES
-    # =========================================================================
-
-    async def _gen_greeting_with_context(self, state, extracted):
-
-        if not extracted.get("summary"):
-            return "Hello, please tell me your concern."
-
-        return f"I understand {extracted['summary']}. Can you share more details?"
-
-    def _gen_validation(self, memory: SemanticMemory):
-
-        parts = []
-
-        if memory.summary:
-            parts.append(memory.summary)
-
-        if memory.key_details:
-            details = ", ".join(f"{k}: {v}" for k, v in memory.key_details.items())
-            parts.append(details)
-
-        statement = " ".join(parts) if parts else "your request"
-
-        return f"Let me confirm, {statement}. Is this correct?"
-
-    async def _gen_followup(self, state):
-
-        missing = state.memory.missing_info or ["more details"]
-
-        return f"Can you tell me more about {missing[0]}?"
-
-    async def _gen_clarification(self, state):
-
-        return "I understand. Could you clarify that?"
-
-    def _gen_final_response(self, state):
-
-        if state.confidence_level == "red":
-            return "We are connecting you to a human agent."
-
-        if state.confidence_level == "yellow":
-            return "We have noted your concern. Our team will review it."
-
-        return "Your request has been recorded. Help is being arranged."
-
-    # =========================================================================
-    # STREAMING
-    # =========================================================================
-
-    async def _stream_text(self, text: str) -> AsyncGenerator[str, None]:
-
-        sentences = text.split(".")
-
-        for s in sentences:
-            s = s.strip()
-            if s:
-                yield s + "."
+        # COMPLETE — no further processing
+        self.active_calls[call_id] = state
