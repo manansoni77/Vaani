@@ -11,8 +11,8 @@ from sarvamai import AsyncSarvamAI, AudioOutput, EventResponse
 from audio_utils import AUDIO_DIR, PCM_SAMPLE_RATE, mix_audio, save_wav
 from constants import LOG_ENTITIES
 # from llm_pipeline import VoiceIntelligencePipeline, ConversationState
-from llm_pipeline import mock_dialogue_flow
-from llm import LLMClient
+# from llm import LLMClient
+from llm_pipeline import DialogueFlow
 from logger import get_logger
 
 SARVAM_API_KEY = os.getenv("SARVAM_API_KEY")
@@ -45,6 +45,7 @@ class CallSession:
 
     def __post_init__(self) -> None:
         sid = self.session_id
+        self.dialogue_flow = DialogueFlow()
         self.call_log = get_logger(LOG_ENTITIES.CALL,       session_id=sid)
         self.stt_log  = get_logger(LOG_ENTITIES.SARVAM_STT, session_id=sid)
         self.tts_log  = get_logger(LOG_ENTITIES.SARVAM_TTS, session_id=sid)
@@ -114,11 +115,11 @@ class CallSession:
         self._pending_lang = lang
 
     async def _queue_tts_sentences(self, text: str, lang: str) -> None:
-        llmClient = LLMClient()
+        # llmClient = LLMClient()
         # pipeline = VoiceIntelligencePipeline(llmClient)
 
         buf: list[str] = []
-        response = await mock_dialogue_flow(text)
+        response = await self.dialogue_flow.get_response(text)
         # async for word in pipeline.process(text, self.conversationState):
 
         async for word in response:
@@ -299,7 +300,12 @@ class CallSession:
 
     # ------------------------------------------------------------------ entry point
 
+    async def _send_greeting(self) -> None:
+        self.call_log.info("sending greeting")
+        await self._queue_tts_sentences("", "en-IN")
+
     async def run(self) -> None:
+        asyncio.create_task(self._send_greeting())
         self.stt_handle = asyncio.create_task(self.stt_task())
         self.tts_handle = asyncio.create_task(self.tts_task())
         try:
