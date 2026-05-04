@@ -9,7 +9,7 @@ from fastapi import WebSocket, WebSocketDisconnect
 from sarvamai import AsyncSarvamAI, AudioOutput, EventResponse
 
 from audio_utils import AUDIO_DIR, PCM_SAMPLE_RATE, mix_audio, save_wav
-from constants import LOG_ENTITIES
+from constants import LOG_ENTITIES, PHASE
 # from llm_pipeline import VoiceIntelligencePipeline, ConversationState
 # from llm import LLMClient
 from llm_pipeline import DialogueFlow
@@ -45,7 +45,7 @@ class CallSession:
 
     def __post_init__(self) -> None:
         sid = self.session_id
-        self.dialogue_flow = DialogueFlow()
+        self.dialogue_flow = DialogueFlow(session_id=sid)
         self.call_log = get_logger(LOG_ENTITIES.CALL,       session_id=sid)
         self.stt_log  = get_logger(LOG_ENTITIES.SARVAM_STT, session_id=sid)
         self.tts_log  = get_logger(LOG_ENTITIES.SARVAM_TTS, session_id=sid)
@@ -147,9 +147,11 @@ class CallSession:
         while True:
             item = await self.tts_queue.get()
             if item is None:
+                self.tts_queue.task_done()
                 break
             sentence, lang = item
             await self._synthesise_sentence(sarvam, sentence, lang)
+            self.tts_queue.task_done()
 
     async def _synthesise_sentence(self, sarvam: AsyncSarvamAI, sentence: str, lang: str) -> None:
         try:
@@ -238,6 +240,18 @@ class CallSession:
         self._pending_lang = None
         self.stt_log.info(f"speech ended — processing: {full_text!r}")
         await self._queue_tts_sentences(full_text, lang)
+        if self.dialogue_flow.phase == PHASE.COMPLETE:
+            asyncio.create_task(self._end_call())
+
+    async def _end_call(self) -> None:
+        self.call_log.info("dialogue complete — waiting for TTS to drain before ending call")
+        await self.tts_queue.join()
+        self.call_log.info("sending END_CALL and closing websocket")
+        try:
+            await self.websocket.send_json({"type": "END_CALL"})
+            await self.websocket.close()
+        except Exception as e:
+            self.call_log.warning(f"END_CALL close error: {e!r}")
 
     # ------------------------------------------------------------------ shutdown
 

@@ -9,6 +9,7 @@ class LOG_ENTITIES(str, Enum):
     SARVAM_STT = "SARVAM_STT"
     SARVAM_TTS = "SARVAM_TTS"
     OPENAI_LLM = "OPENAI_LLM"
+    DIALOGUE_FLOW = "DIALOGUE_FLOW"
 
 class PHASE(str, Enum):
     GREETING   = "GREETING"
