@@ -25,16 +25,6 @@ function voiceBandAvg(bins: Uint8Array, sampleRate: number, fftSize: number): nu
   return count > 0 ? sum / count : 0;
 }
 
-function voiceBandAvg(bins: Uint8Array, sampleRate: number, fftSize: number): number {
-  const binHz = sampleRate / fftSize;
-  let sum = 0, count = 0;
-  for (let i = 0; i < bins.length; i++) {
-    const freq = i * binHz;
-    if (freq >= 85 && freq <= 255) { sum += bins[i]; count++; }
-  }
-  return count > 0 ? sum / count : 0;
-}
-
 export default function CallPage() {
   const [status, setStatus] = useState<CallStatus>("idle");
   const [sessionId, setSessionId] = useState<string | null>(null);

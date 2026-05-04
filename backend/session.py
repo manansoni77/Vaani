@@ -10,10 +10,13 @@ from sarvamai import AsyncSarvamAI, AudioOutput, EventResponse
 
 from audio_utils import AUDIO_DIR, PCM_SAMPLE_RATE, mix_audio, save_wav
 from constants import LOG_ENTITIES
-from llm import word_ticker
+# from llm_pipeline import VoiceIntelligencePipeline, ConversationState
+from llm_pipeline import mock_dialogue_flow
+from llm import LLMClient
 from logger import get_logger
 
 SARVAM_API_KEY = os.getenv("SARVAM_API_KEY")
+SARVAM_SPEAKER_PROFILE = os.getenv("SARVAM_SPEAKER_PROFILE", "ishita")
 
 # When True, audio is only forwarded to Sarvam STT while the frontend VAD reports speaking=true.
 # When False (default), all audio is forwarded and Sarvam's internal VAD handles filtering.
@@ -26,6 +29,7 @@ class CallSession:
     websocket: WebSocket
     loop: asyncio.AbstractEventLoop
     session_start: float
+    # conversationState: ConversationState
 
     audio_chunks: list[bytes] = field(default_factory=list)
     tts_events: list[tuple[float, bytes]] = field(default_factory=list)
@@ -36,6 +40,8 @@ class CallSession:
     stt_handle: asyncio.Task | None = field(default=None,  init=False)
     tts_handle: asyncio.Task | None = field(default=None,  init=False)
     _speaking:  bool               = field(default=False, init=False)
+    _pending_transcript_parts: list[str] = field(default_factory=list, init=False)
+    _pending_lang: str | None            = field(default=None,         init=False)
 
     def __post_init__(self) -> None:
         sid = self.session_id
@@ -102,13 +108,20 @@ class CallSession:
         lang = getattr(data, "language_code", None) or "en-IN"
         if not text:
             return
-        self.stt_log.info(f"transcript: {text}  lang={lang}")
+        self.stt_log.info(f"transcript chunk: {text}  lang={lang}")
         self.transcript_parts.append(text)
-        await self._queue_tts_sentences(text, lang)
+        self._pending_transcript_parts.append(text)
+        self._pending_lang = lang
 
     async def _queue_tts_sentences(self, text: str, lang: str) -> None:
+        llmClient = LLMClient()
+        # pipeline = VoiceIntelligencePipeline(llmClient)
+
         buf: list[str] = []
-        async for word in word_ticker(text):
+        response = await mock_dialogue_flow(text)
+        # async for word in pipeline.process(text, self.conversationState):
+
+        async for word in response:
             buf.append(word)
             if word and word[-1] in ".?!":
                 sentence = " ".join(buf)
@@ -158,7 +171,7 @@ class CallSession:
         self.tts_log.debug(f"configuration: lang={lang}, speaker=shubh, codec=linear16, rate=16000")
         await tts_ws.configure(
             target_language_code=lang,
-            speaker="shubh",
+            speaker=SARVAM_SPEAKER_PROFILE,
             output_audio_codec="linear16",
             speech_sample_rate=16000,
         )
@@ -209,8 +222,21 @@ class CallSession:
             self.call_log.warning(f"bad JSON: {e!r}  raw={raw[:80]!r}")
             return
         if vad.get("type") == "vad":
+            was_speaking = self._speaking
             self._speaking = bool(vad.get("speaking"))
             self.call_log.debug(f"VAD: speaking={self._speaking}")
+            if was_speaking and not self._speaking:
+                asyncio.create_task(self._flush_pending_transcript())
+
+    async def _flush_pending_transcript(self) -> None:
+        if not self._pending_transcript_parts:
+            return
+        full_text = " ".join(self._pending_transcript_parts)
+        lang = self._pending_lang or "en-IN"
+        self._pending_transcript_parts = []
+        self._pending_lang = None
+        self.stt_log.info(f"speech ended — processing: {full_text!r}")
+        await self._queue_tts_sentences(full_text, lang)
 
     # ------------------------------------------------------------------ shutdown
 
