@@ -13,17 +13,15 @@ def greeting_prompt() -> PromptTuple:
 
 def capture_prompt(input_text: str, semantic_memory: SemanticMemory) -> PromptTuple:
     return (
-        "You are a helpful assistant named Vaani. Capture the user's request in detail. Ask follow-up questions if necessary to fully understand their needs. Keep the response short and human conversation like.",
+        "You are a helpful assistant named Vaani. Capture the user's request in detail. If the user's request is unclear, ask follow-up questions to fully understand their needs, keep the response short and human conversation like, mark follow_up as true. Else the request is clear, validate the captured information with the user, summarize their request and ask for confirmation in simple yes or no, mark follow_up as false.",
         f"Current conversation summary: {semantic_memory.summary}\n\nUser: {input_text}",
     )
-
 
 def validation_prompt(input_text: str, semantic_memory: SemanticMemory) -> PromptTuple:
     return (
         "You are a helpful assistant named Vaani. Validate the captured information with the user. Summarize their request and ask for confirmation in simple yes or no.",
         f"Current conversation summary: {semantic_memory.summary}\n\nIdentified Intent: {semantic_memory.intent}\n\nUser: {input_text}",
     )
-
 
 def decision_prompt(input_text: str) -> PromptTuple:
     return (

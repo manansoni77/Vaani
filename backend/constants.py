@@ -1,6 +1,5 @@
 from enum import Enum
 from typing import List
-
 from pydantic import BaseModel
 
 
@@ -45,7 +44,15 @@ class SemanticMemory(BaseModel):
     summary: str = ""
     intent: str = ""
     key_details: str = ""
-    contradictions: List = []
+    contradictions: List[str] = []
     sentiment: SENTIMENT = SENTIMENT.NEUTRAL
     urgency_level: URGENCY_LEVEL = URGENCY_LEVEL.NONE
     human_requested: bool = False
+
+class CaptureAndValidationResponse(SemanticMemory):
+    response: str
+    follow_up: bool
+    agent_confidence: CONFIDENCE_LEVEL
+
+class DecisionResponse(BaseModel):
+    user_confidence: CONFIDENCE_LEVEL

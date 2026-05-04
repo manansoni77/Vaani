@@ -119,7 +119,7 @@ class CallSession:
         # pipeline = VoiceIntelligencePipeline(llmClient)
 
         buf: list[str] = []
-        response = await self.dialogue_flow.get_response(text)
+        response = self.dialogue_flow.get_response(text)
         # async for word in pipeline.process(text, self.conversationState):
 
         async for word in response:
