@@ -3,3 +3,4 @@ sarvamai
 openai
 SQLAlchemy
 boto3
+psycopg2
