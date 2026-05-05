@@ -7,7 +7,7 @@ from fastapi import FastAPI, WebSocket
 from fastapi.middleware.cors import CORSMiddleware
 
 import uuid
-from audio_utils import AUDIO_DIR
+from audio_utils import R2_ACCOUNT_ID, R2_BUCKET_NAME
 from constants import LOG_ENTITIES
 # from llm_pipeline import ConversationState
 from logger import get_logger, setup_logging
@@ -17,14 +17,16 @@ from session import CallSession
 
 _app_log = get_logger(LOG_ENTITIES.APP)
 
-os.makedirs(AUDIO_DIR, exist_ok=True)
-
 
 @asynccontextmanager
 async def lifespan(_: FastAPI):
     print_logs = os.getenv("PRINT_LOGS", "1") not in ("0", "false", "no")
     setup_logging(print_logs=print_logs)
     _app_log.info("starting up")
+    if R2_ACCOUNT_ID and R2_BUCKET_NAME:
+        _app_log.info(f"R2 storage configured: bucket={R2_BUCKET_NAME}")
+    else:
+        _app_log.warning("R2 storage NOT configured — audio will be discarded")
     yield
 
 
@@ -58,3 +60,9 @@ async def call(websocket: WebSocket):
         # conversationState=conversationState
     )
     await session.run()
+
+
+if __name__ == "__main__":
+    import uvicorn
+
+    uvicorn.run(app, host="0.0.0.0", port=8000)
