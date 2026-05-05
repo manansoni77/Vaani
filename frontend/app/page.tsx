@@ -21,7 +21,7 @@ export default function Home() {
             📞 Make a Call
           </Link>
           <Link
-            href="/dashboard"
+            href="/admin"
             className="flex items-center justify-center px-6 py-4 bg-green-600 hover:bg-green-700 text-white font-semibold rounded-lg transition-colors shadow-md hover:shadow-lg"
           >
             📊 Dashboard
