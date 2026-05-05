@@ -2,14 +2,14 @@ import logging
 import os
 from datetime import datetime, timezone
 
-from sqlalchemy import Column, Integer, String, create_engine
+from sqlalchemy import Boolean, Column, Float, Integer, String, Text, create_engine
 from sqlalchemy.orm import DeclarativeBase, Session
 
 # Change DB_URL to switch backends — no other code needs to change.
-# SQLite:     sqlite:///logs.db
+# SQLite:     sqlite:///application.db
 # PostgreSQL: postgresql://user:pass@host/dbname
 # MySQL:      mysql+pymysql://user:pass@host/dbname
-DB_URL = os.getenv("DB_URL", "sqlite:///logs.db")
+DB_URL = os.getenv("DB_URL", "sqlite:///application.db")
 
 _engine = None
 
@@ -34,6 +34,52 @@ class LogEntry(Base):
     session_id = Column(String, nullable=False, default="NA")
     timestamp = Column(String, nullable=False)
     message = Column(String, nullable=False)
+
+
+class CallSessionRecord(Base):
+    __tablename__ = "call_sessions"
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    session_id = Column(String, nullable=False, unique=True)
+    started_at = Column(String, nullable=False)
+    ended_at = Column(String, nullable=False)
+    duration_s = Column(Float, nullable=False)
+    phase = Column(String, nullable=False)
+    turns = Column(Integer, nullable=False, default=0)
+    sentiment = Column(String, nullable=False, default="neutral")
+    urgency_level = Column(String, nullable=False, default="none")
+    human_requested = Column(Boolean, nullable=False, default=False)
+    transcript = Column(Text, nullable=False, default="")
+
+
+def save_call_session(
+    session_id: str,
+    started_at: str,
+    ended_at: str,
+    duration_s: float,
+    phase: str,
+    turns: int,
+    sentiment: str,
+    urgency_level: str,
+    human_requested: bool,
+    transcript: str,
+) -> None:
+    try:
+        with Session(_get_engine()) as db_session:
+            db_session.add(CallSessionRecord(
+                session_id=session_id,
+                started_at=started_at,
+                ended_at=ended_at,
+                duration_s=duration_s,
+                phase=phase,
+                turns=turns,
+                sentiment=sentiment,
+                urgency_level=urgency_level,
+                human_requested=human_requested,
+                transcript=transcript,
+            ))
+            db_session.commit()
+    except Exception:
+        logging.getLogger("helpline").error(f"failed to save call session {session_id!r}", exc_info=True)
 
 
 class LogFormat(logging.Formatter):

@@ -55,7 +55,7 @@ def build_status(
     sentiment: str,
     urgency_level: str,
     human_requested: bool,
-    transcript_snippet: str,
+    transcript: str,
 ) -> dict:
     return {
         "event_type": event_type,
@@ -67,6 +67,6 @@ def build_status(
         "sentiment": sentiment,
         "urgency_level": urgency_level,
         "human_requested": human_requested,
-        "transcript_snippet": transcript_snippet,
+        "transcript": transcript,
         "timestamp": datetime.now(timezone.utc).isoformat(timespec="milliseconds"),
     }

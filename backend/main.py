@@ -2,15 +2,15 @@ import asyncio
 import os
 import uuid
 from contextlib import asynccontextmanager
+from datetime import datetime, timezone
 
 from fastapi import FastAPI, WebSocket
 from fastapi.middleware.cors import CORSMiddleware
 
-import uuid
 from audio_utils import AUDIO_DIR
 from constants import LOG_ENTITIES
 # from llm_pipeline import ConversationState
-from logger import get_logger, setup_logging
+from logger import get_logger, save_call_session, setup_logging
 from logs_router import router as logs_router
 from session import CallSession
 from sessions_router import router as sessions_router
@@ -64,3 +64,16 @@ async def call(websocket: WebSocket):
         await session.run()
     finally:
         session._emit_status("session_ended")
+        mem = session.dialogue_flow.semantic_memory
+        save_call_session(
+            session_id=session.session_id,
+            started_at=session.started_at,
+            ended_at=datetime.now(timezone.utc).isoformat(timespec="milliseconds"),
+            duration_s=round(session.loop.time() - session.session_start, 2),
+            phase=session.dialogue_flow.phase.value,
+            turns=session.dialogue_flow.turns,
+            sentiment=mem.sentiment.value,
+            urgency_level=mem.urgency_level.value,
+            human_requested=mem.human_requested,
+            transcript="\n".join(f"{t['role']}: {t['text']}" for t in session.conversation_turns),
+        )

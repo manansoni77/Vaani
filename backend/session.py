@@ -35,6 +35,7 @@ class CallSession:
     audio_chunks: list[bytes] = field(default_factory=list)
     tts_events: list[tuple[float, bytes]] = field(default_factory=list)
     transcript_parts: list[str] = field(default_factory=list)
+    conversation_turns: list[dict] = field(default_factory=list)
     audio_queue: asyncio.Queue = field(default_factory=asyncio.Queue)
     tts_queue: asyncio.Queue = field(default_factory=asyncio.Queue)
 
@@ -47,14 +48,16 @@ class CallSession:
     def __post_init__(self) -> None:
         sid = self.session_id
         self.dialogue_flow = DialogueFlow(session_id=sid)
+        self.started_at = datetime.now(timezone.utc).isoformat(timespec="milliseconds")
         self.call_log = get_logger(LOG_ENTITIES.CALL,       session_id=sid)
         self.stt_log  = get_logger(LOG_ENTITIES.SARVAM_STT, session_id=sid)
         self.tts_log  = get_logger(LOG_ENTITIES.SARVAM_TTS, session_id=sid)
 
     def _emit_status(self, event_type: str) -> None:
         mem = self.dialogue_flow.semantic_memory
-        words = " ".join(self.transcript_parts).split()
-        snippet = " ".join(words[-15:]) if words else ""
+        transcript = "\n".join(
+            f"{t['role']}: {t['text']}" for t in self.conversation_turns
+        )
         status = build_status(
             event_type=event_type,
             session_id=self.session_id,
@@ -65,7 +68,7 @@ class CallSession:
             sentiment=mem.sentiment.value,
             urgency_level=mem.urgency_level.value,
             human_requested=mem.human_requested,
-            transcript_snippet=snippet,
+            transcript=transcript,
         )
         SessionBroadcaster.get().publish(status)
 
@@ -134,25 +137,26 @@ class CallSession:
         self._pending_lang = lang
 
     async def _queue_tts_sentences(self, text: str, lang: str) -> None:
-        # llmClient = LLMClient()
-        # pipeline = VoiceIntelligencePipeline(llmClient)
-
         buf: list[str] = []
+        agent_parts: list[str] = []
         response = self.dialogue_flow.get_response(text)
-        # async for word in pipeline.process(text, self.conversationState):
 
         async for word in response:
-            print(f"speaking {word}")
             buf.append(word)
             if word and word[-1] in ".?!":
                 sentence = " ".join(buf)
                 self.tts_log.debug(f"queuing sentence: {sentence!r}")
                 await self.tts_queue.put((sentence, lang))
+                agent_parts.append(sentence)
                 buf = []
         if buf:
             sentence = " ".join(buf)
             self.tts_log.debug(f"queuing final fragment: {sentence!r}")
             await self.tts_queue.put((sentence, lang))
+            agent_parts.append(sentence)
+
+        if agent_parts:
+            self.conversation_turns.append({"role": "agent", "text": " ".join(agent_parts)})
 
     # ------------------------------------------------------------------ TTS
 
@@ -261,6 +265,7 @@ class CallSession:
         self._pending_transcript_parts = []
         self._pending_lang = None
         self.stt_log.info(f"speech ended — processing: {full_text!r}")
+        self.conversation_turns.append({"role": "user", "text": full_text})
         await self._queue_tts_sentences(full_text, lang)
         self._emit_status("session_updated")
         if self.dialogue_flow.phase == PHASE.COMPLETE:
