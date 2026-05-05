@@ -5,6 +5,7 @@ description = "Add your description here"
 readme = "README.md"
 requires-python = ">=3.10"
 dependencies = [
+    "boto3>=1.43.3",
     "fastapi[standard-no-fastapi-cloud-cli]>=0.136.1",
     "openai>=2.33.0",
     "sarvamai>=0.1.28",

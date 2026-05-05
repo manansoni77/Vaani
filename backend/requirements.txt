@@ -1,4 +1,5 @@
 "fastapi[standard-no-fastapi-cloud-cli]"
 sarvamai
-openai 
+openai
 SQLAlchemy
+boto3

@@ -7,18 +7,17 @@ from datetime import datetime, timezone
 from fastapi import FastAPI, WebSocket
 from fastapi.middleware.cors import CORSMiddleware
 
-from audio_utils import AUDIO_DIR
+import uuid
+from audio_utils import R2_ACCOUNT_ID, R2_BUCKET_NAME
 from constants import LOG_ENTITIES
+
 # from llm_pipeline import ConversationState
 from logger import get_logger, save_call_session, setup_logging
 from logs_router import router as logs_router
 from session import CallSession
 from sessions_router import router as sessions_router
 
-
 _app_log = get_logger(LOG_ENTITIES.APP)
-
-os.makedirs(AUDIO_DIR, exist_ok=True)
 
 
 @asynccontextmanager
@@ -26,6 +25,10 @@ async def lifespan(_: FastAPI):
     print_logs = os.getenv("PRINT_LOGS", "1") not in ("0", "false", "no")
     setup_logging(print_logs=print_logs)
     _app_log.info("starting up")
+    if R2_ACCOUNT_ID and R2_BUCKET_NAME:
+        _app_log.info(f"R2 storage configured: bucket={R2_BUCKET_NAME}")
+    else:
+        _app_log.warning("R2 storage NOT configured — audio will be discarded")
     yield
 
 
@@ -51,7 +54,7 @@ async def call(websocket: WebSocket):
 
     # conversationState = ConversationState(call_id=session_id)
     loop = asyncio.get_running_loop()
-    
+
     session = CallSession(
         session_id=session_id,
         websocket=websocket,
@@ -75,5 +78,13 @@ async def call(websocket: WebSocket):
             sentiment=mem.sentiment.value,
             urgency_level=mem.urgency_level.value,
             human_requested=mem.human_requested,
-            transcript="\n".join(f"{t['role']}: {t['text']}" for t in session.conversation_turns),
+            transcript="\n".join(
+                f"{t['role']}: {t['text']}" for t in session.conversation_turns
+            ),
         )
+
+
+if __name__ == "__main__":
+    import uvicorn
+
+    uvicorn.run(app, host="0.0.0.0", port=8000)
