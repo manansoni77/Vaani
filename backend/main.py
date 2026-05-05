@@ -2,6 +2,7 @@ import asyncio
 import os
 import uuid
 from contextlib import asynccontextmanager
+from datetime import datetime, timezone
 
 from fastapi import FastAPI, WebSocket
 from fastapi.middleware.cors import CORSMiddleware
@@ -9,11 +10,12 @@ from fastapi.middleware.cors import CORSMiddleware
 import uuid
 from audio_utils import R2_ACCOUNT_ID, R2_BUCKET_NAME
 from constants import LOG_ENTITIES
+
 # from llm_pipeline import ConversationState
-from logger import get_logger, setup_logging
+from logger import get_logger, save_call_session, setup_logging
 from logs_router import router as logs_router
 from session import CallSession
-
+from sessions_router import router as sessions_router
 
 _app_log = get_logger(LOG_ENTITIES.APP)
 
@@ -40,6 +42,7 @@ app.add_middleware(
 )
 
 app.include_router(logs_router)
+app.include_router(sessions_router)
 
 
 @app.websocket("/call")
@@ -51,7 +54,7 @@ async def call(websocket: WebSocket):
 
     # conversationState = ConversationState(call_id=session_id)
     loop = asyncio.get_running_loop()
-    
+
     session = CallSession(
         session_id=session_id,
         websocket=websocket,
@@ -59,10 +62,23 @@ async def call(websocket: WebSocket):
         session_start=loop.time(),
         # conversationState=conversationState
     )
-    await session.run()
-
-
-if __name__ == "__main__":
-    import uvicorn
-
-    uvicorn.run(app, host="0.0.0.0", port=8000)
+    session._emit_status("session_started")
+    try:
+        await session.run()
+    finally:
+        session._emit_status("session_ended")
+        mem = session.dialogue_flow.semantic_memory
+        save_call_session(
+            session_id=session.session_id,
+            started_at=session.started_at,
+            ended_at=datetime.now(timezone.utc).isoformat(timespec="milliseconds"),
+            duration_s=round(session.loop.time() - session.session_start, 2),
+            phase=session.dialogue_flow.phase.value,
+            turns=session.dialogue_flow.turns,
+            sentiment=mem.sentiment.value,
+            urgency_level=mem.urgency_level.value,
+            human_requested=mem.human_requested,
+            transcript="\n".join(
+                f"{t['role']}: {t['text']}" for t in session.conversation_turns
+            ),
+        )
