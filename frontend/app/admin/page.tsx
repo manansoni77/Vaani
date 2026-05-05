@@ -5,25 +5,32 @@ import Link from "next/link";
 
 import { API_BASE, WS_BASE } from "@/lib/config";
 
+type Tab = "live" | "history";
 type Phase = "GREETING" | "CAPTURE" | "VALIDATION" | "DECISION" | "COMPLETE";
 type Sentiment = "neutral" | "calm" | "anxious" | "angry";
 type Urgency = "none" | "low" | "medium" | "high";
 type WsStatus = "connecting" | "connected" | "disconnected" | "error";
 
-interface SessionStatus {
+const PAGE_SIZE = 20;
+
+interface Session {
+  id?: number;
   session_id: string;
   phase: Phase;
-  speaking: boolean;
   duration_s: number;
   turns: number;
   sentiment: Sentiment;
   urgency_level: Urgency;
   human_requested: boolean;
-  transcript_snippet: string;
-  timestamp: string;
+  transcript?: string;
+  started_at?: string;
+  ended_at?: string;
+  // Live-only
+  speaking?: boolean;
+  timestamp?: string;
 }
 
-interface SessionEvent extends SessionStatus {
+interface SessionEvent extends Session {
   event_type: "session_started" | "session_updated" | "session_ended";
 }
 
@@ -33,19 +40,42 @@ function formatDuration(s: number): string {
   return `${m}:${sec.toString().padStart(2, "0")}`;
 }
 
+function transcriptPreview(transcript?: string): string {
+  if (!transcript) return "";
+  const lines = transcript.split("\n").filter(Boolean);
+  const last = lines[lines.length - 1] ?? "";
+  return last.replace(/^(user|agent):\s*/i, "");
+}
+
 export default function AdminPage() {
-  const [sessions, setSessions] = useState<Record<string, SessionStatus>>({});
-  const [selected, setSelected] = useState<string | null>(null);
+  const [tab, setTab] = useState<Tab>("live");
+
+  // Live tab
+  const [sessions, setSessions] = useState<Record<string, Session>>({});
   const [wsStatus, setWsStatus] = useState<WsStatus>("connecting");
   const wsRef = useRef<WebSocket | null>(null);
 
+  // History tab
+  const [history, setHistory] = useState<Session[]>([]);
+  const [historyHasMore, setHistoryHasMore] = useState(false);
+  const [historyLoading, setHistoryLoading] = useState(false);
+  const [historyFetched, setHistoryFetched] = useState(false);
+  const [startDate, setStartDate] = useState("");
+  const [endDate, setEndDate] = useState("");
+  const [order, setOrder] = useState<"newest" | "oldest">("newest");
+  const historyOffsetRef = useRef(0);
+  const hasFetchedRef = useRef(false);
+
+  // Shared
+  const [selectedId, setSelectedId] = useState<string | null>(null);
+
+  // --- Live WebSocket ---
   const connect = useCallback(() => {
     wsRef.current?.close();
     const ws = new WebSocket(`${WS_BASE}/sessions/stream`);
     wsRef.current = ws;
 
     ws.onopen = () => setWsStatus("connected");
-
     ws.onmessage = (e) => {
       try {
         const event: SessionEvent = JSON.parse(e.data as string);
@@ -55,7 +85,7 @@ export default function AdminPage() {
             delete next[event.session_id];
             return next;
           });
-          setSelected((sel) => (sel === event.session_id ? null : sel));
+          setSelectedId((sel) => (sel === event.session_id ? null : sel));
         } else {
           setSessions((prev) => ({ ...prev, [event.session_id]: event }));
         }
@@ -63,16 +93,16 @@ export default function AdminPage() {
         // ignore malformed frames
       }
     };
-
     ws.onerror = () => setWsStatus("error");
-    ws.onclose = () => setWsStatus((s) => (s === "connecting" ? "error" : "disconnected"));
+    ws.onclose = () =>
+      setWsStatus((s) => (s === "connecting" ? "error" : "disconnected"));
   }, []);
 
   useEffect(() => {
-    // Seed from REST as fallback in case WS is slow
+    // Seed live sessions from REST in case WS is slow
     fetch(`${API_BASE}/sessions`)
       .then((r) => r.json())
-      .then((data: SessionStatus[]) => {
+      .then((data: Session[]) => {
         setSessions((prev) => {
           const next = { ...prev };
           for (const s of data) next[s.session_id] = s;
@@ -89,8 +119,80 @@ export default function AdminPage() {
     };
   }, [connect]);
 
+  // --- History fetching ---
+  const buildHistoryQuery = useCallback(
+    (offset: number) => {
+      const p = new URLSearchParams();
+      if (startDate) p.set("start_date", new Date(startDate).toISOString());
+      if (endDate) p.set("end_date", new Date(endDate).toISOString());
+      p.set("order", order);
+      p.set("limit", String(PAGE_SIZE));
+      p.set("offset", String(offset));
+      return p.toString();
+    },
+    [startDate, endDate, order]
+  );
+
+  const fetchHistory = useCallback(async () => {
+    try {
+      const res = await fetch(
+        `${API_BASE}/sessions/history?${buildHistoryQuery(0)}`
+      );
+      if (!res.ok) throw new Error();
+      const data: Session[] = await res.json();
+      setHistory(data);
+      historyOffsetRef.current = data.length;
+      setHistoryHasMore(data.length === PAGE_SIZE);
+      setHistoryFetched(true);
+    } catch {
+      setHistoryFetched(true);
+    } finally {
+      setHistoryLoading(false);
+    }
+  }, [buildHistoryQuery]);
+
+  const loadMoreHistory = useCallback(async () => {
+    setHistoryLoading(true);
+    try {
+      const res = await fetch(
+        `${API_BASE}/sessions/history?${buildHistoryQuery(historyOffsetRef.current)}`
+      );
+      if (!res.ok) throw new Error();
+      const data: Session[] = await res.json();
+      setHistory((prev) => {
+        const seen = new Set(prev.map((s) => s.id));
+        return [...prev, ...data.filter((s) => s.id == null || !seen.has(s.id))];
+      });
+      historyOffsetRef.current += data.length;
+      setHistoryHasMore(data.length === PAGE_SIZE);
+    } catch {
+      // silently fail
+    } finally {
+      setHistoryLoading(false);
+    }
+  }, [buildHistoryQuery]);
+
+  // Auto-fetch history on first visit to history tab.
+  // setTimeout defers the call so no setState runs synchronously inside the effect body.
+  useEffect(() => {
+    if (tab !== "history" || hasFetchedRef.current) return;
+    hasFetchedRef.current = true;
+    const id = setTimeout(() => fetchHistory(), 0);
+    return () => clearTimeout(id);
+  }, [tab, fetchHistory]);
+
+  const switchTab = (t: Tab) => {
+    setTab(t);
+    setSelectedId(null);
+  };
+
   const sessionList = Object.values(sessions);
-  const selectedSession = selected ? sessions[selected] : null;
+  const selectedSession =
+    selectedId != null
+      ? tab === "live"
+        ? sessions[selectedId]
+        : history.find((h) => h.session_id === selectedId)
+      : undefined;
 
   return (
     <div className="h-screen flex flex-col bg-linear-to-br from-green-50 to-emerald-100 dark:from-slate-900 dark:to-slate-800">
@@ -102,14 +204,19 @@ export default function AdminPage() {
           </h1>
           <WsStatusBadge
             status={wsStatus}
-            onReconnect={() => { setWsStatus("connecting"); connect(); }}
+            onReconnect={() => {
+              setWsStatus("connecting");
+              connect();
+            }}
           />
         </div>
         <div className="flex items-center gap-3">
-          <span className="text-sm text-slate-500 dark:text-slate-400">
-            {sessionList.length} active{" "}
-            {sessionList.length === 1 ? "call" : "calls"}
-          </span>
+          {tab === "live" && (
+            <span className="text-sm text-slate-500 dark:text-slate-400">
+              {sessionList.length} active{" "}
+              {sessionList.length === 1 ? "call" : "calls"}
+            </span>
+          )}
           <Link
             href="/"
             className="px-3 py-1.5 bg-slate-600 hover:bg-slate-700 text-white text-sm font-semibold rounded-lg transition-colors"
@@ -119,31 +226,142 @@ export default function AdminPage() {
         </div>
       </header>
 
+      {/* Tabs */}
+      <div className="shrink-0 flex items-center gap-1 px-4 pt-3 bg-white/60 dark:bg-slate-900/60 border-b border-slate-200 dark:border-slate-700">
+        <TabButton active={tab === "live"} onClick={() => switchTab("live")}>
+          <span
+            className={`w-2 h-2 rounded-full ${
+              wsStatus === "connected" ? "bg-green-500" : "bg-slate-300 dark:bg-slate-600"
+            }`}
+          />
+          Live Calls
+          {sessionList.length > 0 && (
+            <span className="ml-1 px-1.5 py-0.5 rounded-full bg-green-100 dark:bg-green-900/50 text-green-700 dark:text-green-300 text-xs font-bold leading-none">
+              {sessionList.length}
+            </span>
+          )}
+        </TabButton>
+        <TabButton active={tab === "history"} onClick={() => switchTab("history")}>
+          Completed Calls
+        </TabButton>
+      </div>
+
       {/* Body */}
       <div className="flex flex-1 overflow-hidden">
-        {/* Card grid */}
-        <div className="flex-1 overflow-y-auto p-4">
-          {sessionList.length === 0 ? (
-            <div className="flex flex-col items-center justify-center h-full text-slate-400 dark:text-slate-500 gap-2">
-              <p className="text-base font-medium">No active calls</p>
-              <p className="text-sm">
-                Sessions will appear here as calls connect
-              </p>
+        {/* Main area */}
+        <div className="flex-1 overflow-y-auto">
+          {tab === "live" ? (
+            <div className="p-4">
+              {sessionList.length === 0 ? (
+                <div className="flex flex-col items-center justify-center py-32 text-slate-400 dark:text-slate-500 gap-2">
+                  <p className="text-base font-medium">No active calls</p>
+                  <p className="text-sm">
+                    Sessions will appear here as calls connect
+                  </p>
+                </div>
+              ) : (
+                <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3">
+                  {sessionList.map((s) => (
+                    <SessionCard
+                      key={s.session_id}
+                      session={s}
+                      live
+                      selected={selectedId === s.session_id}
+                      onClick={() =>
+                        setSelectedId((prev) =>
+                          prev === s.session_id ? null : s.session_id
+                        )
+                      }
+                    />
+                  ))}
+                </div>
+              )}
             </div>
           ) : (
-            <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3">
-              {sessionList.map((s) => (
-                <SessionCard
-                  key={s.session_id}
-                  session={s}
-                  selected={selected === s.session_id}
-                  onClick={() =>
-                    setSelected((prev) =>
-                      prev === s.session_id ? null : s.session_id
-                    )
-                  }
+            <div className="flex flex-col">
+              {/* History filter bar */}
+              <div className="sticky top-0 z-10 flex flex-wrap items-center gap-2 px-4 py-2.5 bg-white/95 dark:bg-slate-900/95 backdrop-blur-sm border-b border-slate-200 dark:border-slate-700">
+                <input
+                  type="datetime-local"
+                  value={startDate}
+                  onChange={(e) => setStartDate(e.target.value)}
+                  disabled={historyLoading}
+                  className="px-3 py-1.5 text-sm bg-white dark:bg-slate-800 border border-slate-300 dark:border-slate-600 rounded-lg text-slate-900 dark:text-white disabled:opacity-50 focus:outline-none focus:ring-2 focus:ring-green-400"
                 />
-              ))}
+                <input
+                  type="datetime-local"
+                  value={endDate}
+                  onChange={(e) => setEndDate(e.target.value)}
+                  disabled={historyLoading}
+                  className="px-3 py-1.5 text-sm bg-white dark:bg-slate-800 border border-slate-300 dark:border-slate-600 rounded-lg text-slate-900 dark:text-white disabled:opacity-50 focus:outline-none focus:ring-2 focus:ring-green-400"
+                />
+                <select
+                  value={order}
+                  onChange={(e) => setOrder(e.target.value as "newest" | "oldest")}
+                  disabled={historyLoading}
+                  className="px-3 py-1.5 text-sm bg-white dark:bg-slate-800 border border-slate-300 dark:border-slate-600 rounded-lg text-slate-900 dark:text-white disabled:opacity-50 focus:outline-none focus:ring-2 focus:ring-green-400"
+                >
+                  <option value="newest">Newest first</option>
+                  <option value="oldest">Oldest first</option>
+                </select>
+                <button
+                  onClick={fetchHistory}
+                  disabled={historyLoading}
+                  className="px-4 py-1.5 bg-slate-700 hover:bg-slate-800 disabled:opacity-50 text-white text-sm font-semibold rounded-lg transition-colors"
+                >
+                  Search
+                </button>
+                {historyHasMore && (
+                  <button
+                    onClick={loadMoreHistory}
+                    disabled={historyLoading}
+                    className="px-4 py-1.5 bg-green-600 hover:bg-green-700 disabled:opacity-50 text-white text-sm font-semibold rounded-lg transition-colors"
+                  >
+                    Load More
+                  </button>
+                )}
+                {historyLoading && (
+                  <span className="flex items-center gap-1.5 text-sm text-slate-500 dark:text-slate-400">
+                    <svg
+                      className="w-4 h-4 animate-spin"
+                      viewBox="0 0 24 24"
+                      fill="none"
+                      stroke="currentColor"
+                      strokeWidth={2.5}
+                    >
+                      <circle cx={12} cy={12} r={10} strokeOpacity={0.25} />
+                      <path d="M12 2a10 10 0 0 1 10 10" />
+                    </svg>
+                    Loading...
+                  </span>
+                )}
+              </div>
+
+              {/* History cards */}
+              <div className="p-4">
+                {historyFetched && history.length === 0 && !historyLoading ? (
+                  <div className="flex flex-col items-center justify-center py-32 text-slate-400 dark:text-slate-500 gap-2">
+                    <p className="text-base font-medium">No completed calls</p>
+                    <p className="text-sm">Try adjusting your date filters</p>
+                  </div>
+                ) : (
+                  <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3">
+                    {history.map((s) => (
+                      <SessionCard
+                        key={s.id ?? s.session_id}
+                        session={s}
+                        live={false}
+                        selected={selectedId === s.session_id}
+                        onClick={() =>
+                          setSelectedId((prev) =>
+                            prev === s.session_id ? null : s.session_id
+                          )
+                        }
+                      />
+                    ))}
+                  </div>
+                )}
+              </div>
             </div>
           )}
         </div>
@@ -157,7 +375,8 @@ export default function AdminPage() {
           {selectedSession && (
             <DetailPanel
               session={selectedSession}
-              onClose={() => setSelected(null)}
+              live={tab === "live"}
+              onClose={() => setSelectedId(null)}
             />
           )}
         </div>
@@ -166,63 +385,46 @@ export default function AdminPage() {
   );
 }
 
-// --- Child components ---
+// --- Tab button ---
 
-function WsStatusBadge({
-  status,
-  onReconnect,
+function TabButton({
+  active,
+  onClick,
+  children,
 }: {
-  status: WsStatus;
-  onReconnect: () => void;
+  active: boolean;
+  onClick: () => void;
+  children: React.ReactNode;
 }) {
-  const styles: Record<WsStatus, { label: string; cls: string }> = {
-    connecting: {
-      label: "Connecting",
-      cls: "bg-yellow-100 text-yellow-700 dark:bg-yellow-900/50 dark:text-yellow-300",
-    },
-    connected: {
-      label: "Live",
-      cls: "bg-green-100 text-green-700 dark:bg-green-900/50 dark:text-green-300",
-    },
-    disconnected: {
-      label: "Disconnected",
-      cls: "bg-slate-100 text-slate-600 dark:bg-slate-700 dark:text-slate-300",
-    },
-    error: {
-      label: "Error",
-      cls: "bg-red-100 text-red-700 dark:bg-red-900/50 dark:text-red-300",
-    },
-  };
-  const { label, cls } = styles[status];
   return (
-    <span
-      className={`inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full text-xs font-semibold ${cls}`}
+    <button
+      onClick={onClick}
+      className={`flex items-center gap-1.5 px-4 py-2 text-sm font-semibold rounded-t-lg border-b-2 transition-colors ${
+        active
+          ? "border-green-500 text-green-700 dark:text-green-400 bg-white/80 dark:bg-slate-800/80"
+          : "border-transparent text-slate-500 dark:text-slate-400 hover:text-slate-700 dark:hover:text-slate-200"
+      }`}
     >
-      {status === "connected" && (
-        <span className="w-1.5 h-1.5 rounded-full bg-green-500 animate-pulse" />
-      )}
-      {label}
-      {(status === "disconnected" || status === "error") && (
-        <button
-          onClick={onReconnect}
-          className="underline text-xs ml-0.5 hover:no-underline"
-        >
-          Retry
-        </button>
-      )}
-    </span>
+      {children}
+    </button>
   );
 }
 
+// --- Session card ---
+
 function SessionCard({
   session,
+  live,
   selected,
   onClick,
 }: {
-  session: SessionStatus;
+  session: Session;
+  live: boolean;
   selected: boolean;
   onClick: () => void;
 }) {
+  const preview = transcriptPreview(session.transcript);
+
   return (
     <button
       onClick={onClick}
@@ -237,10 +439,15 @@ function SessionCard({
         <span className="font-mono text-xs text-slate-400 dark:text-slate-500 truncate">
           {session.session_id.slice(0, 12)}…
         </span>
-        {session.speaking && (
+        {live && session.speaking && (
           <span className="flex items-center gap-1 text-xs text-blue-600 dark:text-blue-400 font-semibold shrink-0">
             <span className="w-1.5 h-1.5 rounded-full bg-blue-500 animate-pulse" />
             Speaking
+          </span>
+        )}
+        {!live && session.ended_at && (
+          <span className="text-xs text-slate-400 dark:text-slate-500 shrink-0">
+            {new Date(session.ended_at).toLocaleDateString()}
           </span>
         )}
       </div>
@@ -257,10 +464,10 @@ function SessionCard({
         )}
       </div>
 
-      {/* Transcript snippet */}
-      {session.transcript_snippet && (
+      {/* Transcript preview */}
+      {preview && (
         <p className="text-xs text-slate-500 dark:text-slate-400 italic line-clamp-2 leading-relaxed">
-          &ldquo;{session.transcript_snippet}&rdquo;
+          &ldquo;{preview}&rdquo;
         </p>
       )}
 
@@ -276,11 +483,15 @@ function SessionCard({
   );
 }
 
+// --- Detail panel ---
+
 function DetailPanel({
   session,
+  live,
   onClose,
 }: {
-  session: SessionStatus;
+  session: Session;
+  live: boolean;
   onClose: () => void;
 }) {
   const [copied, setCopied] = useState(false);
@@ -292,9 +503,14 @@ function DetailPanel({
     });
   };
 
+  const transcriptLines = (session.transcript ?? "")
+    .split("\n")
+    .map((l) => l.trim())
+    .filter(Boolean);
+
   return (
     <div className="p-4 flex flex-col gap-5 min-w-0">
-      {/* Panel header */}
+      {/* Header */}
       <div className="flex items-center justify-between">
         <h2 className="text-sm font-bold text-slate-900 dark:text-white">
           Session Detail
@@ -338,14 +554,14 @@ function DetailPanel({
         </div>
       </div>
 
-      {/* Phase & speaking */}
+      {/* Status */}
       <div className="flex flex-col gap-1.5">
         <span className="text-xs font-semibold text-slate-400 uppercase tracking-wide">
           Status
         </span>
         <div className="flex flex-wrap gap-1.5">
           <PhaseBadge phase={session.phase} />
-          {session.speaking && (
+          {live && session.speaking && (
             <span className="inline-flex items-center gap-1 text-xs px-2 py-0.5 rounded-full bg-blue-100 text-blue-700 dark:bg-blue-900/50 dark:text-blue-300 font-semibold">
               <span className="w-1.5 h-1.5 rounded-full bg-blue-500 animate-pulse" />
               Speaking
@@ -386,35 +602,95 @@ function DetailPanel({
         </div>
       </div>
 
+      {/* Timestamps */}
+      {(session.started_at || session.ended_at) && (
+        <div className="flex flex-col gap-1.5">
+          <span className="text-xs font-semibold text-slate-400 uppercase tracking-wide">
+            Timeline
+          </span>
+          <div className="flex flex-col gap-1 bg-slate-50 dark:bg-slate-700/50 rounded-lg px-3 py-2.5">
+            {session.started_at && (
+              <div className="flex justify-between text-xs">
+                <span className="text-slate-400">Started</span>
+                <span className="font-mono text-slate-600 dark:text-slate-300">
+                  {new Date(session.started_at).toLocaleTimeString(undefined, {
+                    hour: "2-digit",
+                    minute: "2-digit",
+                    second: "2-digit",
+                  })}
+                </span>
+              </div>
+            )}
+            {session.ended_at && (
+              <div className="flex justify-between text-xs">
+                <span className="text-slate-400">Ended</span>
+                <span className="font-mono text-slate-600 dark:text-slate-300">
+                  {new Date(session.ended_at).toLocaleTimeString(undefined, {
+                    hour: "2-digit",
+                    minute: "2-digit",
+                    second: "2-digit",
+                  })}
+                </span>
+              </div>
+            )}
+          </div>
+        </div>
+      )}
+
       {/* Transcript */}
       <div className="flex flex-col gap-1.5">
         <span className="text-xs font-semibold text-slate-400 uppercase tracking-wide">
-          Last Transcript
+          Transcript
         </span>
-        {session.transcript_snippet ? (
-          <p className="text-sm text-slate-700 dark:text-slate-300 italic bg-slate-50 dark:bg-slate-700/50 rounded-lg px-3 py-2.5 leading-relaxed">
-            &ldquo;{session.transcript_snippet}&rdquo;
-          </p>
-        ) : (
+        {transcriptLines.length === 0 ? (
           <p className="text-xs text-slate-400 dark:text-slate-500">
             No transcript yet
           </p>
+        ) : (
+          <div className="flex flex-col gap-1.5 max-h-80 overflow-y-auto">
+            {transcriptLines.map((line, i) => {
+              const isAgent = /^agent:/i.test(line);
+              const isUser = /^user:/i.test(line);
+              const text = line.replace(/^(user|agent):\s*/i, "");
+              return (
+                <div
+                  key={i}
+                  className={`text-xs px-3 py-2 rounded-lg leading-relaxed ${
+                    isAgent
+                      ? "bg-green-50 dark:bg-green-900/20 text-green-800 dark:text-green-300"
+                      : isUser
+                      ? "bg-slate-100 dark:bg-slate-700 text-slate-700 dark:text-slate-300"
+                      : "text-slate-500 dark:text-slate-400 italic"
+                  }`}
+                >
+                  {(isAgent || isUser) && (
+                    <span className="font-semibold text-xs uppercase tracking-wide opacity-60 block mb-0.5">
+                      {isAgent ? "Agent" : "User"}
+                    </span>
+                  )}
+                  {text}
+                </div>
+              );
+            })}
+          </div>
         )}
       </div>
 
-      {/* Last updated */}
-      <div className="flex flex-col gap-0.5">
-        <span className="text-xs font-semibold text-slate-400 uppercase tracking-wide">
-          Last Updated
-        </span>
-        <span className="text-xs font-mono text-slate-500 dark:text-slate-400">
-          {new Date(session.timestamp).toLocaleTimeString(undefined, {
-            hour: "2-digit",
-            minute: "2-digit",
-            second: "2-digit",
-          })}
-        </span>
-      </div>
+      {/* Last updated (live only) */}
+      {live && session.timestamp && (
+        <div className="flex flex-col gap-0.5">
+          <span className="text-xs font-semibold text-slate-400 uppercase tracking-wide">
+            Last Updated
+          </span>
+          <span className="text-xs font-mono text-slate-500 dark:text-slate-400">
+            {new Date(session.timestamp).toLocaleTimeString(undefined, {
+              hour: "2-digit",
+              minute: "2-digit",
+              second: "2-digit",
+            })}
+          </span>
+        </div>
+      )}
     </div>
   );
 }
@@ -423,21 +699,14 @@ function DetailPanel({
 
 function PhaseBadge({ phase }: { phase: Phase }) {
   const styles: Record<Phase, string> = {
-    GREETING:
-      "bg-blue-100 text-blue-700 dark:bg-blue-900/50 dark:text-blue-300",
-    CAPTURE:
-      "bg-purple-100 text-purple-700 dark:bg-purple-900/50 dark:text-purple-300",
-    VALIDATION:
-      "bg-amber-100 text-amber-700 dark:bg-amber-900/50 dark:text-amber-300",
-    DECISION:
-      "bg-orange-100 text-orange-700 dark:bg-orange-900/50 dark:text-orange-300",
-    COMPLETE:
-      "bg-green-100 text-green-700 dark:bg-green-900/50 dark:text-green-300",
+    GREETING: "bg-blue-100 text-blue-700 dark:bg-blue-900/50 dark:text-blue-300",
+    CAPTURE: "bg-purple-100 text-purple-700 dark:bg-purple-900/50 dark:text-purple-300",
+    VALIDATION: "bg-amber-100 text-amber-700 dark:bg-amber-900/50 dark:text-amber-300",
+    DECISION: "bg-orange-100 text-orange-700 dark:bg-orange-900/50 dark:text-orange-300",
+    COMPLETE: "bg-green-100 text-green-700 dark:bg-green-900/50 dark:text-green-300",
   };
   return (
-    <span
-      className={`text-xs px-2 py-0.5 rounded-full font-semibold tracking-wide ${styles[phase]}`}
-    >
+    <span className={`text-xs px-2 py-0.5 rounded-full font-semibold tracking-wide ${styles[phase]}`}>
       {phase}
     </span>
   );
@@ -445,17 +714,13 @@ function PhaseBadge({ phase }: { phase: Phase }) {
 
 function SentimentBadge({ sentiment }: { sentiment: Sentiment }) {
   const styles: Record<Sentiment, string> = {
-    neutral:
-      "bg-slate-100 text-slate-600 dark:bg-slate-700 dark:text-slate-300",
+    neutral: "bg-slate-100 text-slate-600 dark:bg-slate-700 dark:text-slate-300",
     calm: "bg-green-100 text-green-700 dark:bg-green-900/50 dark:text-green-300",
-    anxious:
-      "bg-amber-100 text-amber-700 dark:bg-amber-900/50 dark:text-amber-300",
+    anxious: "bg-amber-100 text-amber-700 dark:bg-amber-900/50 dark:text-amber-300",
     angry: "bg-red-100 text-red-700 dark:bg-red-900/50 dark:text-red-300",
   };
   return (
-    <span
-      className={`text-xs px-2 py-0.5 rounded-full font-medium ${styles[sentiment]}`}
-    >
+    <span className={`text-xs px-2 py-0.5 rounded-full font-medium ${styles[sentiment]}`}>
       {sentiment}
     </span>
   );
@@ -465,8 +730,7 @@ function UrgencyBadge({ urgency }: { urgency: Urgency }) {
   const styles: Record<Urgency, string> = {
     none: "bg-slate-100 text-slate-500 dark:bg-slate-700 dark:text-slate-400",
     low: "bg-blue-100 text-blue-600 dark:bg-blue-900/50 dark:text-blue-300",
-    medium:
-      "bg-amber-100 text-amber-700 dark:bg-amber-900/50 dark:text-amber-300",
+    medium: "bg-amber-100 text-amber-700 dark:bg-amber-900/50 dark:text-amber-300",
     high: "bg-red-100 text-red-700 dark:bg-red-900/50 dark:text-red-300",
   };
   const labels: Record<Urgency, string> = {
@@ -476,10 +740,49 @@ function UrgencyBadge({ urgency }: { urgency: Urgency }) {
     high: "High urgency",
   };
   return (
-    <span
-      className={`text-xs px-2 py-0.5 rounded-full font-medium ${styles[urgency]}`}
-    >
+    <span className={`text-xs px-2 py-0.5 rounded-full font-medium ${styles[urgency]}`}>
       {labels[urgency]}
+    </span>
+  );
+}
+
+function WsStatusBadge({
+  status,
+  onReconnect,
+}: {
+  status: WsStatus;
+  onReconnect: () => void;
+}) {
+  const styles: Record<WsStatus, { label: string; cls: string }> = {
+    connecting: {
+      label: "Connecting",
+      cls: "bg-yellow-100 text-yellow-700 dark:bg-yellow-900/50 dark:text-yellow-300",
+    },
+    connected: {
+      label: "Live",
+      cls: "bg-green-100 text-green-700 dark:bg-green-900/50 dark:text-green-300",
+    },
+    disconnected: {
+      label: "Disconnected",
+      cls: "bg-slate-100 text-slate-600 dark:bg-slate-700 dark:text-slate-300",
+    },
+    error: {
+      label: "Error",
+      cls: "bg-red-100 text-red-700 dark:bg-red-900/50 dark:text-red-300",
+    },
+  };
+  const { label, cls } = styles[status];
+  return (
+    <span className={`inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full text-xs font-semibold ${cls}`}>
+      {status === "connected" && (
+        <span className="w-1.5 h-1.5 rounded-full bg-green-500 animate-pulse" />
+      )}
+      {label}
+      {(status === "disconnected" || status === "error") && (
+        <button onClick={onReconnect} className="underline text-xs ml-0.5 hover:no-underline">
+          Retry
+        </button>
+      )}
     </span>
   );
 }
