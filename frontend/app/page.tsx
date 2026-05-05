@@ -2,7 +2,7 @@ import Link from "next/link";
 
 export default function Home() {
   return (
-    <div className="min-h-screen flex flex-col items-center justify-center bg-gradient-to-br from-blue-50 to-indigo-100 dark:from-slate-900 dark:to-slate-800 p-4">
+    <div className="min-h-screen flex flex-col items-center justify-center bg-linear-to-br from-blue-50 to-indigo-100 dark:from-slate-900 dark:to-slate-800 p-4">
       <div className="flex flex-col items-center gap-12 w-full max-w-md">
         <div className="text-center">
           <h1 className="text-4xl font-bold text-slate-900 dark:text-white mb-2">
@@ -20,12 +20,12 @@ export default function Home() {
           >
             📞 Make a Call
           </Link>
-          {/* <Link
-            href="/dashboard"
+          <Link
+            href="/admin"
             className="flex items-center justify-center px-6 py-4 bg-green-600 hover:bg-green-700 text-white font-semibold rounded-lg transition-colors shadow-md hover:shadow-lg"
           >
             📊 Dashboard
-          </Link> */}
+          </Link>
           <Link
             href="/audit"
             className="flex items-center justify-center px-6 py-4 bg-purple-600 hover:bg-purple-700 text-white font-semibold rounded-lg transition-colors shadow-md hover:shadow-lg"
