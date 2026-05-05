@@ -8,7 +8,7 @@ from datetime import datetime, timezone
 from fastapi import WebSocket, WebSocketDisconnect
 from sarvamai import AsyncSarvamAI, AudioOutput, EventResponse
 
-from audio_utils import AUDIO_DIR, PCM_SAMPLE_RATE, mix_audio, save_wav
+from audio_utils import PCM_SAMPLE_RATE, mix_wav_bytes, upload_to_r2, wav_bytes
 from constants import LOG_ENTITIES
 # from llm_pipeline import VoiceIntelligencePipeline, ConversationState
 from llm_pipeline import mock_dialogue_flow
@@ -270,32 +270,23 @@ class CallSession:
         if not self.audio_chunks:
             return
         timestamp = datetime.now(timezone.utc).strftime("%Y%m%d_%H%M%S_%f")
-        raw_path  = os.path.join(AUDIO_DIR, f"call_{self.session_id}_{timestamp}.wav")
-        save_wav(self.audio_chunks, raw_path)
-        self.call_log.info(f"raw audio saved to {raw_path}")
+        raw = wav_bytes(self.audio_chunks)
+        try:
+            raw_url = await upload_to_r2(raw, f"audio/call_{self.session_id}_{timestamp}.wav")
+            if raw_url:
+                self.call_log.info(f"raw audio uploaded: {raw_url}")
+            else:
+                self.call_log.warning("R2 not configured — raw audio discarded")
 
-        if self.tts_events:
-            await self._save_mixed_audio(raw_path, timestamp)
-
-    async def _save_mixed_audio(self, raw_path: str, timestamp: str) -> None:
-        overlays: list[tuple[float, str]] = []
-        tmp_paths: list[str] = []
-        for i, (t_s, pcm_bytes) in enumerate(self.tts_events):
-            tmp_path = os.path.join(AUDIO_DIR, f"_tts_{self.session_id}_{i}.wav")
-            save_wav([pcm_bytes], tmp_path)
-            overlays.append((t_s, tmp_path))
-            tmp_paths.append(tmp_path)
-
-        mixed_path = os.path.join(AUDIO_DIR, f"call_{self.session_id}_{timestamp}_mixed.wav")
-        ok = await mix_audio(raw_path, overlays, mixed_path, self.call_log)
-        if ok:
-            self.call_log.info(f"mixed audio saved to {mixed_path}")
-
-        for p in tmp_paths:
-            try:
-                os.remove(p)
-            except OSError:
-                pass
+            if self.tts_events:
+                mixed = mix_wav_bytes(raw, self.tts_events)
+                if mixed:
+                    mixed_url = await upload_to_r2(mixed, f"audio/call_{self.session_id}_{timestamp}_mixed.wav")
+                    if mixed_url:
+                        self.call_log.info(f"mixed audio uploaded: {mixed_url}")
+        except Exception as e:
+            import traceback
+            self.call_log.error(f"audio upload failed: {e!r}\n{traceback.format_exc()}")
 
     # ------------------------------------------------------------------ entry point
 
