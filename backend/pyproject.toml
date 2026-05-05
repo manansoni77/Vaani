@@ -8,7 +8,7 @@ dependencies = [
     "boto3>=1.43.3",
     "fastapi[standard-no-fastapi-cloud-cli]>=0.136.1",
     "openai>=2.33.0",
-    "psycopg2>=2.9.12",
+    "psycopg2-binary>=2.9.12",
     "sarvamai>=0.1.28",
     "sqlalchemy>=2.0.49",
 ]
