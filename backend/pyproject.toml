@@ -7,6 +7,7 @@ requires-python = ">=3.10"
 dependencies = [
     "boto3>=1.43.3",
     "fastapi[standard-no-fastapi-cloud-cli]>=0.136.1",
+    "gunicorn>=26.0.0",
     "openai>=2.33.0",
     "psycopg2-binary>=2.9.12",
     "sarvamai>=0.1.28",

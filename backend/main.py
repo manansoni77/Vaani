@@ -82,9 +82,3 @@ async def call(websocket: WebSocket):
                 f"{t['role']}: {t['text']}" for t in session.conversation_turns
             ),
         )
-
-
-if __name__ == "__main__":
-    import uvicorn
-
-    uvicorn.run(app, host="0.0.0.0", port=8000)

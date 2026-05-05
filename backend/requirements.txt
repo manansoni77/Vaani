@@ -5,3 +5,4 @@ SQLAlchemy
 boto3
 psycopg2-binary
 uvicorn
+gunicorn
