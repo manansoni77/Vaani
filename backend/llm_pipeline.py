@@ -38,6 +38,15 @@ class DialogueFlow:
             ))
 
             self.turns += 1
+            self.semantic_memory = SemanticMemory(
+                summary=response.summary,
+                intent=response.intent,
+                key_details=response.key_details,
+                contradictions=response.contradictions,
+                sentiment=response.sentiment,
+                urgency_level=response.urgency_level,
+                human_requested=response.human_requested,
+            )
             if self.turns >= self.max_turns or response.follow_up == False:
                 if response.agent_confidence in [CONFIDENCE_LEVEL.GREEN, CONFIDENCE_LEVEL.YELLOW]:
                     yield response.response
@@ -46,6 +55,8 @@ class DialogueFlow:
                     self.log.info("phase transitioning to DECISION based on follow_up=false")
                 elif response.agent_confidence == CONFIDENCE_LEVEL.RED:
                     yield "It seems I am not able to understand your query, let me connect you to a human agent for better assistance."
+            else:
+                yield response.response
         elif self.phase == PHASE.VALIDATION:
             self.log.info(f"phase=VALIDATION input={input_text!r}")
             prompt = prompt_fn(input_text, self.semantic_memory)

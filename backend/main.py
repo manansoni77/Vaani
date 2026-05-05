@@ -13,6 +13,7 @@ from constants import LOG_ENTITIES
 from logger import get_logger, setup_logging
 from logs_router import router as logs_router
 from session import CallSession
+from sessions_router import router as sessions_router
 
 
 _app_log = get_logger(LOG_ENTITIES.APP)
@@ -38,6 +39,7 @@ app.add_middleware(
 )
 
 app.include_router(logs_router)
+app.include_router(sessions_router)
 
 
 @app.websocket("/call")
@@ -57,4 +59,8 @@ async def call(websocket: WebSocket):
         session_start=loop.time(),
         # conversationState=conversationState
     )
-    await session.run()
+    session._emit_status("session_started")
+    try:
+        await session.run()
+    finally:
+        session._emit_status("session_ended")

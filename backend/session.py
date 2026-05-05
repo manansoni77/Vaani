@@ -14,6 +14,7 @@ from constants import LOG_ENTITIES, PHASE
 # from llm import LLMClient
 from llm_pipeline import DialogueFlow
 from logger import get_logger
+from session_broadcaster import SessionBroadcaster, build_status
 
 SARVAM_API_KEY = os.getenv("SARVAM_API_KEY")
 SARVAM_SPEAKER_PROFILE = os.getenv("SARVAM_SPEAKER_PROFILE", "ishita")
@@ -49,6 +50,24 @@ class CallSession:
         self.call_log = get_logger(LOG_ENTITIES.CALL,       session_id=sid)
         self.stt_log  = get_logger(LOG_ENTITIES.SARVAM_STT, session_id=sid)
         self.tts_log  = get_logger(LOG_ENTITIES.SARVAM_TTS, session_id=sid)
+
+    def _emit_status(self, event_type: str) -> None:
+        mem = self.dialogue_flow.semantic_memory
+        words = " ".join(self.transcript_parts).split()
+        snippet = " ".join(words[-15:]) if words else ""
+        status = build_status(
+            event_type=event_type,
+            session_id=self.session_id,
+            phase=self.dialogue_flow.phase.value,
+            speaking=self._speaking,
+            duration_s=self.loop.time() - self.session_start,
+            turns=self.dialogue_flow.turns,
+            sentiment=mem.sentiment.value,
+            urgency_level=mem.urgency_level.value,
+            human_requested=mem.human_requested,
+            transcript_snippet=snippet,
+        )
+        SessionBroadcaster.get().publish(status)
 
     # ------------------------------------------------------------------ STT
 
@@ -123,6 +142,7 @@ class CallSession:
         # async for word in pipeline.process(text, self.conversationState):
 
         async for word in response:
+            print(f"speaking {word}")
             buf.append(word)
             if word and word[-1] in ".?!":
                 sentence = " ".join(buf)
@@ -228,6 +248,8 @@ class CallSession:
             was_speaking = self._speaking
             self._speaking = bool(vad.get("speaking"))
             self.call_log.debug(f"VAD: speaking={self._speaking}")
+            if was_speaking != self._speaking:
+                self._emit_status("session_updated")
             if was_speaking and not self._speaking:
                 asyncio.create_task(self._flush_pending_transcript())
 
@@ -240,6 +262,7 @@ class CallSession:
         self._pending_lang = None
         self.stt_log.info(f"speech ended — processing: {full_text!r}")
         await self._queue_tts_sentences(full_text, lang)
+        self._emit_status("session_updated")
         if self.dialogue_flow.phase == PHASE.COMPLETE:
             asyncio.create_task(self._end_call())
 
