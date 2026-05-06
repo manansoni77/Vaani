@@ -30,6 +30,9 @@ export default function CallPage() {
   const [logs, setLogs] = useState<string[]>([]);
   const [speaker, setSpeaker] = useState<Speaker>("silent");
 
+  const [muted, setMuted] = useState(false);
+  const muteRef = useRef(false);
+
   const wsRef = useRef<WebSocket | null>(null);
   const processorRef = useRef<AudioWorkletNode | null>(null);
   const streamRef = useRef<MediaStream | null>(null);
@@ -167,15 +170,20 @@ export default function CallPage() {
 
           const float32: Float32Array = e.data;
           const int16 = new Int16Array(float32.length);
-          for (let i = 0; i < float32.length; i++) {
-            int16[i] = Math.max(-32768, Math.min(32767, float32[i] * 32767));
+          if (!muteRef.current) {
+            for (let i = 0; i < float32.length; i++) {
+              int16[i] = Math.max(-32768, Math.min(32767, float32[i] * 32767));
+            }
           }
           ws.send(int16.buffer);
 
+          if (muteRef.current) {
+            ws.send(JSON.stringify({ type: "vad", speaking: false }));
+            return;
+          }
+
           analyser.getByteFrequencyData(freqBins);
           const avg = voiceBandAvg(freqBins, ctx.sampleRate, analyser.fftSize);
-          console.log(freqBins);
-          console.log("VAD avg:", avg);
           const speaking = avg > VAD_SILENCE_THRESHOLD;
           ws.send(JSON.stringify({ type: "vad", speaking }));
 
@@ -283,27 +291,48 @@ export default function CallPage() {
           )}
 
           <div className="flex flex-col items-center gap-3 py-4">
-            <button
-              onClick={isActive ? stopCall : startCall}
-              disabled={isConnecting}
-              aria-label={isActive ? "End call" : "Start call"}
-              className={`w-24 h-24 rounded-full flex items-center justify-center shadow-lg transition-all active:scale-95 disabled:opacity-50 disabled:cursor-not-allowed text-white ${
-                isActive
-                  ? "bg-red-500 hover:bg-red-600"
-                  : "bg-green-500 hover:bg-green-600"
-              }`}
-            >
-              {isConnecting ? (
-                <SpinnerIcon />
-              ) : isActive ? (
-                <EndCallIcon />
-              ) : (
-                <PhoneIcon />
+            <div className="flex items-center gap-6">
+              <button
+                onClick={isActive ? stopCall : startCall}
+                disabled={isConnecting}
+                aria-label={isActive ? "End call" : "Start call"}
+                className={`w-24 h-24 rounded-full flex items-center justify-center shadow-lg transition-all active:scale-95 disabled:opacity-50 disabled:cursor-not-allowed text-white ${
+                  isActive
+                    ? "bg-red-500 hover:bg-red-600"
+                    : "bg-green-500 hover:bg-green-600"
+                }`}
+              >
+                {isConnecting ? (
+                  <SpinnerIcon />
+                ) : isActive ? (
+                  <EndCallIcon />
+                ) : (
+                  <PhoneIcon />
+                )}
+              </button>
+
+              {isActive && (
+                <button
+                  onClick={() => {
+                    muteRef.current = !muteRef.current;
+                    setMuted(muteRef.current);
+                  }}
+                  aria-label={muted ? "Unmute" : "Mute"}
+                  className={`w-14 h-14 rounded-full flex items-center justify-center shadow-md transition-all active:scale-95 ${
+                    muted
+                      ? "bg-slate-700 hover:bg-slate-800 text-white"
+                      : "bg-slate-200 hover:bg-slate-300 dark:bg-slate-600 dark:hover:bg-slate-500 text-slate-700 dark:text-white"
+                  }`}
+                >
+                  {muted ? <MutedIcon /> : <MicIcon />}
+                </button>
               )}
-            </button>
+            </div>
             <p className="text-sm text-slate-500 dark:text-slate-400">
               {isActive
-                ? "Tap to end call"
+                ? muted
+                  ? "Muted"
+                  : "Tap to end call"
                 : isConnecting
                 ? "Connecting..."
                 : "Tap to start call"}
@@ -436,6 +465,22 @@ function SpinnerIcon() {
     >
       <circle cx={12} cy={12} r={10} strokeOpacity={0.25} />
       <path d="M12 2a10 10 0 0 1 10 10" />
+    </svg>
+  );
+}
+
+function MicIcon() {
+  return (
+    <svg viewBox="0 0 24 24" className="w-6 h-6 fill-current">
+      <path d="M12 1a4 4 0 0 1 4 4v6a4 4 0 0 1-8 0V5a4 4 0 0 1 4-4zm-1.5 17.93A8.001 8.001 0 0 1 4 11H2a10 10 0 0 0 9 9.95V23h2v-2.05A10 10 0 0 0 22 11h-2a8 8 0 0 1-6.5 7.93V19h-3v-0.07z" />
+    </svg>
+  );
+}
+
+function MutedIcon() {
+  return (
+    <svg viewBox="0 0 24 24" className="w-6 h-6 fill-current">
+      <path d="M3.71 2.29a1 1 0 0 0-1.42 1.42l18 18a1 1 0 0 0 1.42-1.42l-18-18zM12 1a4 4 0 0 1 4 4v.18l-8 8V5a4 4 0 0 1 4-4zm4 12.46A4 4 0 0 1 8 11V9.46l8 8zM4 11H2a10 10 0 0 0 9 9.95V23h2v-2.05A10 10 0 0 0 22 11h-2a8 8 0 0 1-14.27 3.7L4 11z" />
     </svg>
   );
 }
