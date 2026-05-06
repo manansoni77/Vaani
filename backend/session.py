@@ -46,6 +46,7 @@ class CallSession:
     _pending_lang: str | None            = field(default=None,         init=False)
     human_takeover: bool                 = field(default=False,        init=False)
     claimed_by: str | None               = field(default=None,         init=False)
+    human_agent_ws: WebSocket | None     = field(default=None,         init=False)
 
     def __post_init__(self) -> None:
         sid = self.session_id
@@ -239,6 +240,11 @@ class CallSession:
                     self.audio_chunks.append(chunk)
                     if not VAD_GATE_STT or self._speaking:
                         await self.audio_queue.put(chunk)
+                    if self.human_agent_ws is not None:
+                        try:
+                            await self.human_agent_ws.send_bytes(chunk)
+                        except Exception:
+                            self.human_agent_ws = None
                     # else:
                     #     self.call_log.debug("VAD gate active — audio chunk dropped")
                 elif message.get("text"):

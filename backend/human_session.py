@@ -31,6 +31,8 @@ class HumanAgentSession:
 
     async def run(self) -> None:
         self.log.info(f"human agent connected — claimed_by={self.call_session.claimed_by!r}")
+        self.call_session.human_agent_ws = self.websocket
+        self.log.info("registered as call_session.human_agent_ws — caller audio will be forwarded")
         stt_handle = None
         if SARVAM_API_KEY:
             stt_handle = asyncio.create_task(self._stt_task())
@@ -39,6 +41,8 @@ class HumanAgentSession:
         try:
             await self._receive_loop()
         finally:
+            self.call_session.human_agent_ws = None
+            self.log.info("cleared call_session.human_agent_ws")
             await self._audio_queue.put(None)
             if stt_handle:
                 try:
