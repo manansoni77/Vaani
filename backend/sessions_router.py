@@ -2,14 +2,18 @@ import json
 from datetime import datetime
 from typing import Literal
 
-from fastapi import APIRouter, Query, WebSocket, WebSocketDisconnect
+from fastapi import APIRouter, HTTPException, Query, WebSocket, WebSocketDisconnect
 from pydantic import BaseModel
 from sqlalchemy.orm import Session
 
-from logger import CallSessionRecord, get_engine
+import session_registry
+from constants import LOG_ENTITIES
+from human_session import HumanAgentSession
+from logger import CallSessionRecord, get_engine, get_logger
 from session_broadcaster import SessionBroadcaster
 
 router = APIRouter(prefix="/sessions", tags=["sessions"])
+_log = get_logger(LOG_ENTITIES.APP)
 
 
 class CallSessionOut(BaseModel):
@@ -73,3 +77,44 @@ async def stream_sessions(websocket: WebSocket) -> None:
         pass
     finally:
         broadcaster.unsubscribe(queue)
+
+
+class TakeoverRequest(BaseModel):
+    agent_id: str
+
+
+@router.post("/{session_id}/takeover")
+async def takeover_session(session_id: str, body: TakeoverRequest) -> dict:
+    """Claim a live call session for human handling. Only one agent can claim at a time."""
+    session = session_registry.get(session_id)
+    if session is None:
+        raise HTTPException(status_code=404, detail="session not found or not active")
+    if session.human_takeover:
+        raise HTTPException(status_code=409, detail=f"session already claimed by {session.claimed_by!r}")
+    session.human_takeover = True
+    session.claimed_by = body.agent_id
+    _log.info(f"session {session_id!r} claimed by agent {body.agent_id!r}")
+    session._emit_status("session_updated")
+    return {"session_id": session_id, "claimed_by": body.agent_id}
+
+
+@router.websocket("/{session_id}/audio")
+async def human_agent_audio(
+    websocket: WebSocket,
+    session_id: str,
+    agent_id: str = Query(...),
+) -> None:
+    """Audio stream for the human agent after takeover.
+
+    Send binary audio chunks and VAD signals identical to the /call protocol.
+    Audio is forwarded live to the caller; VAD false flushes a 'human:' transcript turn.
+    """
+    await websocket.accept()
+    session = session_registry.get(session_id)
+    if session is None:
+        await websocket.close(code=4004, reason="session not found")
+        return
+    if not session.human_takeover or session.claimed_by != agent_id:
+        await websocket.close(code=4003, reason="not authorized")
+        return
+    await HumanAgentSession(call_session=session, agent_websocket=websocket).run()

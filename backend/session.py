@@ -44,6 +44,8 @@ class CallSession:
     _speaking:  bool               = field(default=False, init=False)
     _pending_transcript_parts: list[str] = field(default_factory=list, init=False)
     _pending_lang: str | None            = field(default=None,         init=False)
+    human_takeover: bool                 = field(default=False,        init=False)
+    claimed_by: str | None               = field(default=None,         init=False)
 
     def __post_init__(self) -> None:
         sid = self.session_id
@@ -69,6 +71,8 @@ class CallSession:
             urgency_level=mem.urgency_level.value,
             human_requested=mem.human_requested,
             transcript=transcript,
+            human_takeover=self.human_takeover,
+            claimed_by=self.claimed_by,
         )
         SessionBroadcaster.get().publish(status)
 
@@ -112,7 +116,7 @@ class CallSession:
 
     async def _send_audio(self, sarvam_ws) -> None:
         while (chunk := await self.audio_queue.get()) is not None:
-            self.stt_log.debug(f"sending audio chunk of {len(chunk)} bytes")
+            # self.stt_log.debug(f"sending audio chunk of {len(chunk)} bytes")
             b64 = base64.b64encode(chunk).decode()
             await sarvam_ws.translate(audio=b64)
 
@@ -213,7 +217,7 @@ class CallSession:
                     start_time_s = self.loop.time() - self.session_start
                 audio_parts.append(chunk)
                 await self.websocket.send_bytes(chunk)
-                self.tts_log.debug(f"audio chunk received: {len(chunk)} bytes  request_id={msg.data.request_id}")
+                # self.tts_log.debug(f"audio chunk received: {len(chunk)} bytes  request_id={msg.data.request_id}")
             elif isinstance(msg, EventResponse):
                 event_type = getattr(msg.data, "event_type", None)
                 self.tts_log.debug(f"event received: {event_type}")
@@ -235,8 +239,8 @@ class CallSession:
                     self.audio_chunks.append(chunk)
                     if not VAD_GATE_STT or self._speaking:
                         await self.audio_queue.put(chunk)
-                    else:
-                        self.call_log.debug("VAD gate active — audio chunk dropped")
+                    # else:
+                    #     self.call_log.debug("VAD gate active — audio chunk dropped")
                 elif message.get("text"):
                     self._handle_text_message(message["text"])
         except WebSocketDisconnect:
@@ -266,6 +270,9 @@ class CallSession:
         self._pending_lang = None
         self.stt_log.info(f"speech ended — processing: {full_text!r}")
         self.conversation_turns.append({"role": "user", "text": full_text})
+        if self.human_takeover:
+            self._emit_status("session_updated")
+            return
         await self._queue_tts_sentences(full_text, lang)
         self._emit_status("session_updated")
         if self.dialogue_flow.phase == PHASE.COMPLETE:
