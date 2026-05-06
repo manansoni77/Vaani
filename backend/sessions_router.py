@@ -7,11 +7,13 @@ from pydantic import BaseModel
 from sqlalchemy.orm import Session
 
 import session_registry
+from constants import LOG_ENTITIES
 from human_session import HumanAgentSession
-from logger import CallSessionRecord, get_engine
+from logger import CallSessionRecord, get_engine, get_logger
 from session_broadcaster import SessionBroadcaster
 
 router = APIRouter(prefix="/sessions", tags=["sessions"])
+_log = get_logger(LOG_ENTITIES.APP)
 
 
 class CallSessionOut(BaseModel):
@@ -91,6 +93,7 @@ async def takeover_session(session_id: str, body: TakeoverRequest) -> dict:
         raise HTTPException(status_code=409, detail=f"session already claimed by {session.claimed_by!r}")
     session.human_takeover = True
     session.claimed_by = body.agent_id
+    _log.info(f"session {session_id!r} claimed by agent {body.agent_id!r}")
     session._emit_status("session_updated")
     return {"session_id": session_id, "claimed_by": body.agent_id}
 
