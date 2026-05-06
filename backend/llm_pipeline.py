@@ -51,10 +51,11 @@ class DialogueFlow:
                 if response.agent_confidence in [CONFIDENCE_LEVEL.GREEN, CONFIDENCE_LEVEL.YELLOW]:
                     yield response.response
 
-                    self.phase = PHASE.DECISION
-                    self.log.info("phase transitioning to DECISION based on follow_up=false")
+                    self.phase = PHASE.VALIDATION 
+                    #Tranistioning to validation phase tried to handle that through Prompt 
+                    self.log.info("phase transitioning to VALIDATION based on follow_up=false")
                 elif response.agent_confidence == CONFIDENCE_LEVEL.RED:
-                    yield "It seems I am not able to understand your query, let me connect you to a human agent for better assistance."
+                     yield "It seems I am not able to understand your query, let me connect you to a human agent for better assistance."
             else:
                 yield response.response
         elif self.phase == PHASE.VALIDATION:
