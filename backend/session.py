@@ -151,18 +151,37 @@ class CallSession:
             buf.append(word)
             if word and word[-1] in ".?!":
                 sentence = " ".join(buf)
+                #translate before queing to TTS 
+                translated = await self._translate_to_lang(sentence, lang)
                 self.tts_log.debug(f"queuing sentence: {sentence!r}")
-                await self.tts_queue.put((sentence, lang))
-                agent_parts.append(sentence)
+                await self.tts_queue.put((translated, lang))
+                agent_parts.append(translated)
                 buf = []
         if buf:
             sentence = " ".join(buf)
+            translated = await self._translate_to_lang(sentence, lang)
             self.tts_log.debug(f"queuing final fragment: {sentence!r}")
-            await self.tts_queue.put((sentence, lang))
-            agent_parts.append(sentence)
+            await self.tts_queue.put((translated, lang))
+            agent_parts.append(translated)
 
         if agent_parts:
             self.conversation_turns.append({"role": "agent", "text": " ".join(agent_parts)})
+
+    async def _translate_to_lang(self, text: str, target_lang: str) -> str:
+        if target_lang == "en-IN":
+            return text  # no translation needed
+        try:
+            sarvam = AsyncSarvamAI(api_subscription_key=SARVAM_API_KEY)
+            result = await sarvam.text.translate(
+                input=text,
+                source_language_code="en-IN",
+                target_language_code=target_lang,
+            )
+            self.call_log.info(f"translated to {target_lang!r}: {text!r} → {result.translated_text!r}")
+            return result.translated_text
+        except Exception as e:
+            self.call_log.error(f"translation failed: {e!r} — using original")
+            return text  # fallback to original on error
 
     # ------------------------------------------------------------------ TTS
 
