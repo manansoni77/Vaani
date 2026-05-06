@@ -585,6 +585,7 @@ function DetailPanel({
   const audioCtxRef = useRef<AudioContext | null>(null);
   const processorRef = useRef<ScriptProcessorNode | null>(null);
   const speakingRef = useRef(false);
+  const nextPlayTimeRef = useRef(0);
 
   const isMyClaim =
     live && !!session.human_takeover && session.claimed_by === agentId;
@@ -645,6 +646,29 @@ function DetailPanel({
           setAudioConnected(true);
         };
 
+        ws.binaryType = "arraybuffer";
+        ws.onmessage = (e: MessageEvent) => {
+          if (!(e.data instanceof ArrayBuffer) || e.data.byteLength === 0) return;
+          if (!ctx || ctx.state === "closed") return;
+
+          const int16 = new Int16Array(e.data);
+          const float32 = new Float32Array(int16.length);
+          for (let i = 0; i < int16.length; i++) {
+            float32[i] = int16[i] / 32768;
+          }
+
+          const buffer = ctx.createBuffer(1, float32.length, 16000);
+          buffer.copyToChannel(float32, 0);
+          const source = ctx.createBufferSource();
+          source.buffer = buffer;
+          source.connect(ctx.destination);
+
+          const now = ctx.currentTime;
+          const startAt = Math.max(now + 0.05, nextPlayTimeRef.current);
+          source.start(startAt);
+          nextPlayTimeRef.current = startAt + buffer.duration;
+        };
+
         ws.onerror = () => setAudioError("Audio connection failed");
         ws.onclose = () => {
           if (!cancelled) setAudioConnected(false);
@@ -666,6 +690,7 @@ function DetailPanel({
       audioWsRef.current?.close();
       setAudioConnected(false);
       setSpeaking(false);
+      nextPlayTimeRef.current = 0;
     };
   }, [isMyClaim, session.session_id, agentId]);
 
