@@ -135,6 +135,8 @@ class CallSession:
         lang = getattr(data, "language_code", None) or "en-IN"
         if not text:
             return
+        #log testing 2 
+        self.stt_log.info(f"raw data fields: {data.__dict__}")
         self.stt_log.info(f"transcript chunk: {text}  lang={lang}")
         self.transcript_parts.append(text)
         self._pending_transcript_parts.append(text)
