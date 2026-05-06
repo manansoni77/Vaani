@@ -38,6 +38,7 @@ class DialogueFlow:
             ))
 
             self.turns += 1
+            prev_lang = self.semantic_memory.user_language
             self.semantic_memory = SemanticMemory(
                 summary=response.summary,
                 intent=response.intent,
@@ -48,6 +49,8 @@ class DialogueFlow:
                 human_requested=response.human_requested,
                 user_language=self.semantic_memory.user_language,   # Forgot to carry forward now its preserved fr!!  
             )
+            #log 1 
+            self.log.info(f"semantic_memory rebuilt — lang before={prev_lang!r} lang after={self.semantic_memory.user_language!r}")
             if self.turns >= self.max_turns or response.follow_up == False:
                 if response.agent_confidence in [CONFIDENCE_LEVEL.GREEN, CONFIDENCE_LEVEL.YELLOW]:
                     yield response.response
@@ -60,7 +63,7 @@ class DialogueFlow:
             else:
                 yield response.response
         elif self.phase == PHASE.VALIDATION:
-            self.log.info(f"phase=VALIDATION input={input_text!r}")
+            self.log.info(f"phase=VALIDATION input={input_text!r} lang={self.semantic_memory.user_language!r}")
             prompt = prompt_fn(input_text, self.semantic_memory)
             response = cast(CaptureAndValidationResponse, await llm_client.get_json_response(
                 system_prompt=prompt[0],
@@ -73,7 +76,7 @@ class DialogueFlow:
 
             yield response.response
         elif self.phase == PHASE.DECISION:
-            self.log.info(f"phase=DECISION input={input_text!r}")
+            self.log.info(f"phase=DECISION input={input_text!r} lang={self.semantic_memory.user_language!r}")
             prompt = prompt_fn(input_text, self.semantic_memory) # Added semantic memory to the decision prompt to preserve the user language 
             response = cast(DecisionResponse, await llm_client.get_json_response(
                 system_prompt=prompt[0],

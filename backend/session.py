@@ -199,7 +199,7 @@ class CallSession:
             self.tts_log.error(f"error on {sentence!r}: {e!r}")
 
     async def _configure_tts(self, tts_ws, lang: str) -> None:
-        self.tts_log.debug(f"configuration: lang={lang}, speaker=shubh, codec=linear16, rate=16000")
+        self.tts_log.debug(f"configuration: lang={lang}, speaker={SARVAM_SPEAKER_PROFILE}, codec=linear16, rate=16000")
         await tts_ws.configure(
             target_language_code=lang,
             speaker=SARVAM_SPEAKER_PROFILE,
