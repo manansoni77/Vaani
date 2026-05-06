@@ -6,8 +6,7 @@ import Link from "next/link";
 type CallStatus = "idle" | "connecting" | "active" | "disconnected";
 type Speaker = "silent" | "user" | "agent";
 
-const WS_BASE =
-  process.env.NEXT_PUBLIC_WS_URL?.replace(/\/$/, "") ?? "ws://localhost:8000";
+import { WS_BASE } from "@/lib/config";
 
 // Average magnitude of voice-band frequency bins (85–3000 Hz) below this is silence.
 const VAD_SILENCE_THRESHOLD = 100;
