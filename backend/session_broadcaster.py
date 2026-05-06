@@ -56,6 +56,8 @@ def build_status(
     urgency_level: str,
     human_requested: bool,
     transcript: str,
+    human_takeover: bool = False,
+    claimed_by: str | None = None,
 ) -> dict:
     return {
         "event_type": event_type,
@@ -68,5 +70,7 @@ def build_status(
         "urgency_level": urgency_level,
         "human_requested": human_requested,
         "transcript": transcript,
+        "human_takeover": human_takeover,
+        "claimed_by": claimed_by,
         "timestamp": datetime.now(timezone.utc).isoformat(timespec="milliseconds"),
     }
