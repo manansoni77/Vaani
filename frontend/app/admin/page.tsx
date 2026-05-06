@@ -584,6 +584,7 @@ function DetailPanel({
   const streamRef = useRef<MediaStream | null>(null);
   const audioCtxRef = useRef<AudioContext | null>(null);
   const processorRef = useRef<ScriptProcessorNode | null>(null);
+  const speakingRef = useRef(false);
 
   const isMyClaim =
     live && !!session.human_takeover && session.claimed_by === agentId;
@@ -629,6 +630,7 @@ function DetailPanel({
 
           processor.onaudioprocess = (e) => {
             if (ws.readyState !== WebSocket.OPEN) return;
+            if (!speakingRef.current) return;
             const float32 = e.inputBuffer.getChannelData(0);
             const int16 = new Int16Array(float32.length);
             for (let i = 0; i < float32.length; i++) {
@@ -668,6 +670,7 @@ function DetailPanel({
   }, [isMyClaim, session.session_id, agentId]);
 
   const sendVad = (isSpeaking: boolean) => {
+    speakingRef.current = isSpeaking;
     const ws = audioWsRef.current;
     if (ws?.readyState === WebSocket.OPEN) {
       ws.send(JSON.stringify({ type: "vad", speaking: isSpeaking }));
