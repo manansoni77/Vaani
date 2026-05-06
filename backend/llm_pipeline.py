@@ -46,6 +46,7 @@ class DialogueFlow:
                 sentiment=response.sentiment,
                 urgency_level=response.urgency_level,
                 human_requested=response.human_requested,
+                user_language=self.semantic_memory.user_language,   # Forgot to carry forward now its preserved fr!!  
             )
             if self.turns >= self.max_turns or response.follow_up == False:
                 if response.agent_confidence in [CONFIDENCE_LEVEL.GREEN, CONFIDENCE_LEVEL.YELLOW]:
@@ -73,7 +74,7 @@ class DialogueFlow:
             yield response.response
         elif self.phase == PHASE.DECISION:
             self.log.info(f"phase=DECISION input={input_text!r}")
-            prompt = prompt_fn(input_text)
+            prompt = prompt_fn(input_text, self.semantic_memory) # Added semantic memory to the decision prompt to preserve the user language 
             response = cast(DecisionResponse, await llm_client.get_json_response(
                 system_prompt=prompt[0],
                 user_prompt=prompt[1],

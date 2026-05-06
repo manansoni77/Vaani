@@ -50,6 +50,7 @@ class SemanticMemory(BaseModel):
     sentiment: SENTIMENT = SENTIMENT.NEUTRAL
     urgency_level: URGENCY_LEVEL = URGENCY_LEVEL.NONE
     human_requested: bool = False
+    user_language: str = "en-IN" # Default language is english until the model identifies the language being used by the user 
 
 class CaptureAndValidationResponse(SemanticMemory):
     response: str

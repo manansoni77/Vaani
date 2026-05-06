@@ -265,11 +265,14 @@ class CallSession:
         if not self._pending_transcript_parts:
             return
         full_text = " ".join(self._pending_transcript_parts)
-        lang = self._pending_lang or "en-IN"
+        lang = self._pending_lang or "en-IN" # here we have lang which is the pending language identified from the user input.
         self._pending_transcript_parts = []
         self._pending_lang = None
         self.stt_log.info(f"speech ended — processing: {full_text!r}")
         self.conversation_turns.append({"role": "user", "text": full_text})
+
+        self.dialogue_flow.semantic_memory.user_language = lang
+        #Semantic memory updated with the language identified from the user input, this will help the model to respond in the same language as the user and also to understand the nuances of that language which will improve the overall understanding and response quality.
         if self.human_takeover:
             self._emit_status("session_updated")
             return
