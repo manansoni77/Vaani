@@ -29,6 +29,11 @@ interface Session {
   ended_at?: string;
   audio_url?: string | null;
   audio_mixed_url?: string | null;
+  summary?: string;
+  intent?: string;
+  key_details?: string;
+  agent_confidence?: "GREEN" | "YELLOW" | "RED";
+  user_confidence?: "GREEN" | "YELLOW" | "RED";
   // Live-only
   caller_speaking?: boolean;
   ai_speaking?: boolean;
@@ -1062,6 +1067,39 @@ function DetailPanel({
         )}
       </div>
 
+      {/* Intelligence */}
+      {(session.summary || session.intent || session.key_details || session.agent_confidence || session.user_confidence) && (
+        <div className="flex flex-col gap-2">
+          <span className="text-xs font-semibold text-slate-400 uppercase tracking-wide">
+            Intelligence
+          </span>
+          {session.summary && (
+            <div className="flex flex-col gap-0.5 bg-slate-50 dark:bg-slate-700/50 rounded-lg px-3 py-2.5">
+              <span className="text-xs text-slate-400">Summary</span>
+              <p className="text-xs text-slate-700 dark:text-slate-300 leading-relaxed">{session.summary}</p>
+            </div>
+          )}
+          {session.intent && (
+            <div className="flex flex-col gap-0.5 bg-slate-50 dark:bg-slate-700/50 rounded-lg px-3 py-2.5">
+              <span className="text-xs text-slate-400">Intent</span>
+              <p className="text-xs text-slate-700 dark:text-slate-300">{session.intent}</p>
+            </div>
+          )}
+          {session.key_details && (
+            <div className="flex flex-col gap-0.5 bg-slate-50 dark:bg-slate-700/50 rounded-lg px-3 py-2.5">
+              <span className="text-xs text-slate-400">Key Details</span>
+              <p className="text-xs text-slate-700 dark:text-slate-300 leading-relaxed">{session.key_details}</p>
+            </div>
+          )}
+          {(session.agent_confidence || session.user_confidence) && (
+            <div className="flex flex-wrap gap-1.5">
+              {session.agent_confidence && <ConfidenceBadge label="AI" level={session.agent_confidence} />}
+              {session.user_confidence && <ConfidenceBadge label="User" level={session.user_confidence} />}
+            </div>
+          )}
+        </div>
+      )}
+
       {/* Recording (history only) */}
       {!live && (session.audio_mixed_url || session.audio_url) && (
         <div className="flex flex-col gap-1.5">
@@ -1166,6 +1204,19 @@ function UrgencyBadge({ urgency }: { urgency: Urgency }) {
       className={`text-xs px-2 py-0.5 rounded-full font-medium ${styles[urgency]}`}
     >
       {labels[urgency]}
+    </span>
+  );
+}
+
+function ConfidenceBadge({ label, level }: { label: string; level: "GREEN" | "YELLOW" | "RED" }) {
+  const styles: Record<"GREEN" | "YELLOW" | "RED", string> = {
+    GREEN: "bg-green-100 text-green-700 dark:bg-green-900/50 dark:text-green-300",
+    YELLOW: "bg-amber-100 text-amber-700 dark:bg-amber-900/50 dark:text-amber-300",
+    RED: "bg-red-100 text-red-700 dark:bg-red-900/50 dark:text-red-300",
+  };
+  return (
+    <span className={`text-xs px-2 py-0.5 rounded-full font-semibold ${styles[level]}`}>
+      {label} confidence: {level}
     </span>
   );
 }
