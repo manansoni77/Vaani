@@ -46,6 +46,8 @@ class CallSession:
     _human_speaking: bool = field(default=False, init=False)
     _closed:         bool = field(default=False, init=False)
     _ended:          bool = field(default=False, init=False)
+    audio_url:       str | None = field(default=None, init=False)
+    audio_mixed_url: str | None = field(default=None, init=False)
     _pending_transcript_parts: list[str] = field(default_factory=list, init=False)
     _pending_lang: str | None            = field(default=None,         init=False)
     human_takeover: bool                 = field(default=False,        init=False)
@@ -364,6 +366,7 @@ class CallSession:
         try:
             raw_url = await upload_to_r2(raw, f"audio/call_{self.session_id}_{timestamp}.wav")
             if raw_url:
+                self.audio_url = raw_url
                 self.call_log.info(f"raw audio uploaded: {raw_url}")
             else:
                 self.call_log.warning("R2 not configured — raw audio discarded")
@@ -373,6 +376,7 @@ class CallSession:
                 if mixed:
                     mixed_url = await upload_to_r2(mixed, f"audio/call_{self.session_id}_{timestamp}_mixed.wav")
                     if mixed_url:
+                        self.audio_mixed_url = mixed_url
                         self.call_log.info(f"mixed audio uploaded: {mixed_url}")
         except Exception as e:
             import traceback

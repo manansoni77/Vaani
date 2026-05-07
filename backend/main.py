@@ -84,4 +84,6 @@ async def call(websocket: WebSocket):
             transcript="\n".join(
                 f"{t['role']}: {t['text']}" for t in session.conversation_turns
             ),
+            audio_url=session.audio_url,
+            audio_mixed_url=session.audio_mixed_url,
         )

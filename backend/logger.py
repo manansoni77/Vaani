@@ -49,6 +49,8 @@ class CallSessionRecord(Base):
     urgency_level = Column(String, nullable=False, default="none")
     human_requested = Column(Boolean, nullable=False, default=False)
     transcript = Column(Text, nullable=False, default="")
+    audio_url = Column(String, nullable=True)
+    audio_mixed_url = Column(String, nullable=True)
 
 
 def save_call_session(
@@ -62,6 +64,8 @@ def save_call_session(
     urgency_level: str,
     human_requested: bool,
     transcript: str,
+    audio_url: str | None = None,
+    audio_mixed_url: str | None = None,
 ) -> None:
     try:
         with Session(_get_engine()) as db_session:
@@ -76,6 +80,8 @@ def save_call_session(
                 urgency_level=urgency_level,
                 human_requested=human_requested,
                 transcript=transcript,
+                audio_url=audio_url,
+                audio_mixed_url=audio_mixed_url,
             ))
             db_session.commit()
     except Exception:

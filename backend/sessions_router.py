@@ -28,6 +28,8 @@ class CallSessionOut(BaseModel):
     urgency_level: str
     human_requested: bool
     transcript: str
+    audio_url: str | None = None
+    audio_mixed_url: str | None = None
 
     model_config = {"from_attributes": True}
 
