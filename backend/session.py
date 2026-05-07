@@ -42,6 +42,7 @@ class CallSession:
     stt_handle: asyncio.Task | None = field(default=None,  init=False)
     tts_handle: asyncio.Task | None = field(default=None,  init=False)
     _speaking:  bool               = field(default=False, init=False)
+    _closed:    bool               = field(default=False, init=False)
     _pending_transcript_parts: list[str] = field(default_factory=list, init=False)
     _pending_lang: str | None            = field(default=None,         init=False)
     human_takeover: bool                 = field(default=False,        init=False)
@@ -236,11 +237,13 @@ class CallSession:
                     self.call_log.info("websocket.disconnect received")
                     break
                 if message.get("bytes"):
+                    # print('receiving audio...')
                     chunk = message["bytes"]
                     self.audio_chunks.append(chunk)
                     if not VAD_GATE_STT or self._speaking:
                         await self.audio_queue.put(chunk)
                     if self.human_agent_ws is not None:
+                        # print('forwarding audio to human agent...')
                         try:
                             await self.human_agent_ws.send_bytes(chunk)
                         except Exception:
@@ -261,7 +264,7 @@ class CallSession:
         if vad.get("type") == "vad":
             was_speaking = self._speaking
             self._speaking = bool(vad.get("speaking"))
-            self.call_log.debug(f"VAD: speaking={self._speaking}")
+            # self.call_log.debug(f"VAD: speaking={self._speaking}")
             if was_speaking != self._speaking:
                 self._emit_status("session_updated")
             if was_speaking and not self._speaking:
@@ -294,7 +297,17 @@ class CallSession:
         except Exception as e:
             self.call_log.warning(f"END_CALL close error: {e!r}")
 
-    # ------------------------------------------------------------------ shutdown
+    # ------------------------------------------------------------------ close / shutdown
+
+    async def close(self) -> None:
+        if self._closed:
+            return
+        self._closed = True
+        self.call_log.info("closing session")
+        try:
+            await self.websocket.close()
+        except Exception:
+            pass
 
     async def shutdown(self) -> None:
         await self.audio_queue.put(None)

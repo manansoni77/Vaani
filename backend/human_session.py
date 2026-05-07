@@ -26,8 +26,19 @@ class HumanAgentSession:
         self._audio_queue: asyncio.Queue = asyncio.Queue()
         self._pending_parts: list[str] = []
         self._speaking: bool = False
+        self._closed: bool = False
         sid = call_session.session_id
         self.log = get_logger(LOG_ENTITIES.HUMAN_AGENT, session_id=sid)
+
+    async def close(self) -> None:
+        if self._closed:
+            return
+        self._closed = True
+        self.log.info("closing human agent session")
+        try:
+            await self.websocket.close()
+        except Exception:
+            pass
 
     async def run(self) -> None:
         self.log.info(f"human agent connected — claimed_by={self.call_session.claimed_by!r}")
@@ -56,6 +67,7 @@ class HumanAgentSession:
             self.log.info("human agent disconnected")
 
     async def _receive_loop(self) -> None:
+        tasks = []
         try:
             while True:
                 msg = await self.websocket.receive()
@@ -69,7 +81,7 @@ class HumanAgentSession:
                         await self.call_session.websocket.send_bytes(chunk)
                     except Exception as e:
                         self.log.warning(f"failed to forward audio to caller: {e!r}")
-                    await self._audio_queue.put(chunk)
+                    self._audio_queue.put_nowait(chunk)
                 elif msg.get("text"):
                     await self._handle_vad(msg["text"])
         except WebSocketDisconnect:

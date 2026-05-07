@@ -21,13 +21,12 @@ class DialogueFlow:
 
         if self.phase == PHASE.GREETING:
             self.log.info("phase=GREETING generating greeting")
-            prompt = prompt_fn()
-            response = llm_client.stream_completion(system_prompt=prompt[0], user_prompt=prompt[1])
-
             self.phase = PHASE.CAPTURE
-
-            async for chunk in response:
-                yield chunk
+            yield "Hello! Thank you for calling Vaani. How can I assist you today?"
+            # prompt = prompt_fn()
+            # response = llm_client.stream_completion(system_prompt=prompt[0], user_prompt=prompt[1])
+            # async for chunk in response:
+            #     yield chunk
         elif self.phase == PHASE.CAPTURE:
             self.log.info(f"phase=CAPTURE turn={self.turns + 1} input={input_text!r}")
             prompt = prompt_fn(input_text, self.semantic_memory)

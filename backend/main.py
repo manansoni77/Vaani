@@ -12,7 +12,7 @@ from audio_utils import R2_ACCOUNT_ID, R2_BUCKET_NAME
 from constants import LOG_ENTITIES
 
 # from llm_pipeline import ConversationState
-import session_registry
+from session_registry import register_call, unregister_call
 from logger import get_logger, save_call_session, setup_logging
 from logs_router import router as logs_router
 from session import CallSession
@@ -63,12 +63,12 @@ async def call(websocket: WebSocket):
         session_start=loop.time(),
         # conversationState=conversationState
     )
-    session_registry.register(session_id, session)
+    register_call(session_id, session)
     session._emit_status("session_started")
     try:
         await session.run()
     finally:
-        session_registry.unregister(session_id)
+        await unregister_call(session_id)
         session._emit_status("session_ended")
         mem = session.dialogue_flow.semantic_memory
         save_call_session(

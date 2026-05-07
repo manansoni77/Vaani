@@ -86,7 +86,7 @@ class TakeoverRequest(BaseModel):
 @router.post("/{session_id}/takeover")
 async def takeover_session(session_id: str, body: TakeoverRequest) -> dict:
     """Claim a live call session for human handling. Only one agent can claim at a time."""
-    session = session_registry.get(session_id)
+    session = session_registry.get_call(session_id)
     if session is None:
         raise HTTPException(status_code=404, detail="session not found or not active")
     if session.human_takeover:
@@ -110,11 +110,16 @@ async def human_agent_audio(
     Audio is forwarded live to the caller; VAD false flushes a 'human:' transcript turn.
     """
     await websocket.accept()
-    session = session_registry.get(session_id)
+    session = session_registry.get_call(session_id)
     if session is None:
         await websocket.close(code=4004, reason="session not found")
         return
     if not session.human_takeover or session.claimed_by != agent_id:
         await websocket.close(code=4003, reason="not authorized")
         return
-    await HumanAgentSession(call_session=session, agent_websocket=websocket).run()
+    human_session = HumanAgentSession(call_session=session, agent_websocket=websocket)
+    session_registry.register_human(session_id, human_session)
+    try:
+        await human_session.run()
+    finally:
+        await session_registry.unregister_human(session_id)
