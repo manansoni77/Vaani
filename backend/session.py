@@ -62,13 +62,20 @@ class CallSession:
         self.stt_log  = get_logger(LOG_ENTITIES.SARVAM_STT, session_id=sid)
         self.tts_log  = get_logger(LOG_ENTITIES.SARVAM_TTS, session_id=sid)
 
+    def _format_transcript(self) -> str:
+        lines = []
+        for t in self.conversation_turns:
+            role = t["role"]
+            sentiment = t.get("sentiment")
+            prefix = f"{role} ({sentiment})" if sentiment and sentiment != "neutral" else role
+            lines.append(f"{prefix}: {t['text']}")
+        return "\n".join(lines)
+
     def _emit_status(self, event_type: str) -> None:
         if self._ended:
             return
         mem = self.dialogue_flow.semantic_memory
-        transcript = "\n".join(
-            f"{t['role']}: {t['text']}" for t in self.conversation_turns
-        )
+        transcript = self._format_transcript()
         status = build_status(
             event_type=event_type,
             session_id=self.session_id,
@@ -295,11 +302,13 @@ class CallSession:
         self._pending_transcript_parts = []
         self._pending_lang = None
         self.stt_log.info(f"speech ended — processing: {full_text!r}")
-        self.conversation_turns.append({"role": "user", "text": full_text})
+        user_turn = {"role": "user", "text": full_text}
+        self.conversation_turns.append(user_turn)
         if self.human_takeover:
             self._emit_status("session_updated")
             return
         await self._queue_tts_sentences(full_text, lang)
+        user_turn["sentiment"] = self.dialogue_flow.semantic_memory.sentiment.value
         self._emit_status("session_updated")
         if self.dialogue_flow.phase == PHASE.COMPLETE:
             asyncio.create_task(self._end_call())

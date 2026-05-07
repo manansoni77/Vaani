@@ -81,9 +81,7 @@ async def call(websocket: WebSocket):
             sentiment=mem.sentiment.value,
             urgency_level=mem.urgency_level.value,
             human_requested=mem.human_requested,
-            transcript="\n".join(
-                f"{t['role']}: {t['text']}" for t in session.conversation_turns
-            ),
+            transcript=session._format_transcript(),
             audio_url=session.audio_url,
             audio_mixed_url=session.audio_mixed_url,
         )
