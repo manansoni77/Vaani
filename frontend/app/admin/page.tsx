@@ -27,8 +27,12 @@ interface Session {
   transcript?: string;
   started_at?: string;
   ended_at?: string;
+  audio_url?: string | null;
+  audio_mixed_url?: string | null;
   // Live-only
-  speaking?: boolean;
+  caller_speaking?: boolean;
+  ai_speaking?: boolean;
+  human_speaking?: boolean;
   timestamp?: string;
 }
 
@@ -513,10 +517,22 @@ function SessionCard({
           {session.session_id.slice(0, 12)}…
         </span>
         <div className="flex items-center gap-1.5 shrink-0">
-          {live && session.speaking && (
+          {live && session.caller_speaking && (
             <span className="flex items-center gap-1 text-xs text-blue-600 dark:text-blue-400 font-semibold">
               <span className="w-1.5 h-1.5 rounded-full bg-blue-500 animate-pulse" />
-              Speaking
+              Caller
+            </span>
+          )}
+          {live && session.ai_speaking && (
+            <span className="flex items-center gap-1 text-xs text-green-600 dark:text-green-400 font-semibold">
+              <span className="w-1.5 h-1.5 rounded-full bg-green-500 animate-pulse" />
+              Agent
+            </span>
+          )}
+          {live && session.human_speaking && (
+            <span className="flex items-center gap-1 text-xs text-indigo-600 dark:text-indigo-400 font-semibold">
+              <span className="w-1.5 h-1.5 rounded-full bg-indigo-500 animate-pulse" />
+              Human
             </span>
           )}
           {session.human_takeover && (
@@ -803,10 +819,22 @@ function DetailPanel({
         </span>
         <div className="flex flex-wrap gap-1.5">
           <PhaseBadge phase={session.phase} />
-          {live && session.speaking && (
+          {live && session.caller_speaking && (
             <span className="inline-flex items-center gap-1 text-xs px-2 py-0.5 rounded-full bg-blue-100 text-blue-700 dark:bg-blue-900/50 dark:text-blue-300 font-semibold">
               <span className="w-1.5 h-1.5 rounded-full bg-blue-500 animate-pulse" />
-              Speaking
+              Caller
+            </span>
+          )}
+          {live && session.ai_speaking && (
+            <span className="inline-flex items-center gap-1 text-xs px-2 py-0.5 rounded-full bg-green-100 text-green-700 dark:bg-green-900/50 dark:text-green-300 font-semibold">
+              <span className="w-1.5 h-1.5 rounded-full bg-green-500 animate-pulse" />
+              Agent
+            </span>
+          )}
+          {live && session.human_speaking && (
+            <span className="inline-flex items-center gap-1 text-xs px-2 py-0.5 rounded-full bg-indigo-100 text-indigo-700 dark:bg-indigo-900/50 dark:text-indigo-300 font-semibold">
+              <span className="w-1.5 h-1.5 rounded-full bg-indigo-500 animate-pulse" />
+              Human
             </span>
           )}
         </div>
@@ -1012,6 +1040,30 @@ function DetailPanel({
           </div>
         )}
       </div>
+
+      {/* Recording (history only) */}
+      {!live && (session.audio_mixed_url || session.audio_url) && (
+        <div className="flex flex-col gap-1.5">
+          <span className="text-xs font-semibold text-slate-400 uppercase tracking-wide">
+            Recording
+          </span>
+          <audio
+            controls
+            src={session.audio_mixed_url ?? session.audio_url ?? undefined}
+            className="w-full rounded-lg"
+          />
+          {session.audio_mixed_url && session.audio_url && (
+            <a
+              href={session.audio_url}
+              target="_blank"
+              rel="noreferrer"
+              className="text-xs text-slate-400 hover:text-slate-600 dark:hover:text-slate-300 underline"
+            >
+              Caller-only audio
+            </a>
+          )}
+        </div>
+      )}
 
       {/* Last updated (live only) */}
       {live && session.timestamp && (
