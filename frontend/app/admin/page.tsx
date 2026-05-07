@@ -1005,10 +1005,24 @@ function DetailPanel({
         ) : (
           <div className="flex flex-col gap-1.5 max-h-80 overflow-y-auto">
             {transcriptLines.map((line, i) => {
-              const isAgent = /^agent:/i.test(line);
-              const isUser = /^user:/i.test(line);
-              const isHuman = /^human:/i.test(line);
-              const text = line.replace(/^(user|agent|human):\s*/i, "");
+              const match = line.match(/^(\w+)(?:\s*\(([^)]+)\))?:\s*(.*)/i);
+              const role = match?.[1]?.toLowerCase() ?? "";
+              const turnSentiment = match?.[2] ?? null;
+              const text = match?.[3] ?? line;
+
+              const isAgent = role === "agent";
+              const isUser = role === "user";
+              const isHuman = role === "human";
+
+              const sentimentCls =
+                turnSentiment?.toLowerCase() === "angry"
+                  ? "text-red-600 dark:text-red-400"
+                  : turnSentiment?.toLowerCase() === "anxious"
+                  ? "text-amber-600 dark:text-amber-400"
+                  : turnSentiment?.toLowerCase() === "calm"
+                  ? "text-green-600 dark:text-green-400"
+                  : "opacity-60";
+
               const cls = isAgent
                 ? "bg-green-50 dark:bg-green-900/20 text-green-800 dark:text-green-300"
                 : isHuman
@@ -1016,6 +1030,7 @@ function DetailPanel({
                   : isUser
                     ? "bg-slate-100 dark:bg-slate-700 text-slate-700 dark:text-slate-300"
                     : "text-slate-500 dark:text-slate-400 italic";
+
               const label = isAgent
                 ? "Agent"
                 : isHuman
@@ -1023,14 +1038,20 @@ function DetailPanel({
                   : isUser
                     ? "User"
                     : null;
+
               return (
                 <div
                   key={i}
                   className={`text-xs px-3 py-2 rounded-lg leading-relaxed ${cls}`}
                 >
                   {label && (
-                    <span className="font-semibold text-xs uppercase tracking-wide opacity-60 block mb-0.5">
+                    <span className="font-semibold text-xs uppercase tracking-wide block mb-0.5 opacity-60">
                       {label}
+                      {turnSentiment && (
+                        <span className={`normal-case font-normal ml-1 ${sentimentCls}`}>
+                          ({turnSentiment})
+                        </span>
+                      )}
                     </span>
                   )}
                   {text}
