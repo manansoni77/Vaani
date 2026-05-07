@@ -8,8 +8,9 @@ from datetime import datetime, timezone
 from fastapi import WebSocket, WebSocketDisconnect
 from sarvamai import AsyncSarvamAI, AudioOutput, EventResponse
 
+from audio_cache import load_cached_audio, pcm_chunks, save_cached_audio
 from audio_utils import PCM_SAMPLE_RATE, mix_wav_bytes, upload_to_r2, wav_bytes
-from constants import LOG_ENTITIES, PHASE
+from constants import LOG_ENTITIES, PHASE, PRERECORDED_AUDIO
 # from llm_pipeline import VoiceIntelligencePipeline, ConversationState
 # from llm import LLMClient
 from llm_pipeline import DialogueFlow
@@ -41,9 +42,18 @@ class CallSession:
 
     stt_handle: asyncio.Task | None = field(default=None,  init=False)
     tts_handle: asyncio.Task | None = field(default=None,  init=False)
-    _speaking:  bool               = field(default=False, init=False)
+    _speaking:       bool = field(default=False, init=False)
+    _ai_speaking:    bool = field(default=False, init=False)
+    _human_speaking: bool = field(default=False, init=False)
+    _closed:         bool = field(default=False, init=False)
+    _ended:          bool = field(default=False, init=False)
+    audio_url:       str | None = field(default=None, init=False)
+    audio_mixed_url: str | None = field(default=None, init=False)
     _pending_transcript_parts: list[str] = field(default_factory=list, init=False)
     _pending_lang: str | None            = field(default=None,         init=False)
+    human_takeover: bool                 = field(default=False,        init=False)
+    claimed_by: str | None               = field(default=None,         init=False)
+    human_agent_ws: WebSocket | None     = field(default=None,         init=False)
 
     def __post_init__(self) -> None:
         sid = self.session_id
@@ -53,24 +63,45 @@ class CallSession:
         self.stt_log  = get_logger(LOG_ENTITIES.SARVAM_STT, session_id=sid)
         self.tts_log  = get_logger(LOG_ENTITIES.SARVAM_TTS, session_id=sid)
 
+    def _format_transcript(self) -> str:
+        lines = []
+        for t in self.conversation_turns:
+            role = t["role"]
+            sentiment = t.get("sentiment")
+            prefix = f"{role} ({sentiment})" if sentiment and sentiment != "neutral" else role
+            lines.append(f"{prefix}: {t['text']}")
+        return "\n".join(lines)
+
     def _emit_status(self, event_type: str) -> None:
+        if self._ended:
+            return
         mem = self.dialogue_flow.semantic_memory
-        transcript = "\n".join(
-            f"{t['role']}: {t['text']}" for t in self.conversation_turns
-        )
+        transcript = self._format_transcript()
+        df = self.dialogue_flow
         status = build_status(
             event_type=event_type,
             session_id=self.session_id,
-            phase=self.dialogue_flow.phase.value,
-            speaking=self._speaking,
+            phase=df.phase.value,
+            caller_speaking=self._speaking,
+            ai_speaking=self._ai_speaking,
+            human_speaking=self._human_speaking,
             duration_s=self.loop.time() - self.session_start,
-            turns=self.dialogue_flow.turns,
+            turns=df.turns,
             sentiment=mem.sentiment.value,
             urgency_level=mem.urgency_level.value,
             human_requested=mem.human_requested,
             transcript=transcript,
+            summary=mem.summary,
+            intent=mem.intent,
+            key_details=mem.key_details,
+            agent_confidence=df.agent_confidence.value if df.agent_confidence else None,
+            user_confidence=df.user_confidence.value if df.user_confidence else None,
+            human_takeover=self.human_takeover,
+            claimed_by=self.claimed_by,
         )
         SessionBroadcaster.get().publish(status)
+        if event_type == "session_ended":
+            self._ended = True
 
     # ------------------------------------------------------------------ STT
 
@@ -112,7 +143,7 @@ class CallSession:
 
     async def _send_audio(self, sarvam_ws) -> None:
         while (chunk := await self.audio_queue.get()) is not None:
-            self.stt_log.debug(f"sending audio chunk of {len(chunk)} bytes")
+            # self.stt_log.debug(f"sending audio chunk of {len(chunk)} bytes")
             b64 = base64.b64encode(chunk).decode()
             await sarvam_ws.translate(audio=b64)
 
@@ -174,12 +205,43 @@ class CallSession:
                 self.tts_queue.task_done()
                 break
             sentence, lang = item
+            if not self._ai_speaking:
+                self._ai_speaking = True
+                self._emit_status("session_updated")
             await self._synthesise_sentence(sarvam, sentence, lang)
             self.tts_queue.task_done()
+            if self.tts_queue.empty():
+                self._ai_speaking = False
+                self._emit_status("session_updated")
 
     async def _synthesise_sentence(self, sarvam: AsyncSarvamAI, sentence: str, lang: str) -> None:
+        phrase = PRERECORDED_AUDIO.from_text(sentence)
+
+        if phrase is not None:
+            cached = load_cached_audio(phrase, lang)
+            if cached is not None:
+                start_time_s = self.loop.time() - self.session_start
+                chunks = pcm_chunks(cached)
+                total_bytes = sum(len(c) for c in chunks)
+                self.tts_log.info(
+                    f"[CACHE] streaming {phrase.slug!r}  lang={lang}"
+                    f"  chunks={len(chunks)}  bytes={total_bytes}"
+                )
+                for chunk in chunks:
+                    await self.websocket.send_bytes(chunk)
+                if chunks:
+                    self.tts_events.append((start_time_s, b"".join(chunks)))
+                self.tts_log.info(f"[CACHE] done streaming {phrase.slug!r}")
+                return
+            else:
+                self.tts_log.info(
+                    f"[CACHE] miss for {phrase.slug!r}  lang={lang} — falling back to Sarvam TTS"
+                )
+        else:
+            self.tts_log.info(f"[SARVAM] dynamic sentence: {sentence!r}  lang={lang}")
+
         try:
-            self.tts_log.info(f"connecting for: {sentence!r}  lang={lang}")
+            self.tts_log.info(f"[SARVAM] connecting for: {sentence!r}  lang={lang}")
             async with sarvam.text_to_speech_streaming.connect(
                 model="bulbul:v3", send_completion_event=True
             ) as tts_ws:
@@ -188,11 +250,18 @@ class CallSession:
                 await tts_ws.flush()
                 audio_parts, start_time_s = await self._collect_tts_audio(tts_ws)
 
+            total_bytes = sum(len(p) for p in audio_parts)
+            self.tts_log.info(
+                f"[SARVAM] done: {sentence!r}  chunks={len(audio_parts)}  bytes={total_bytes}"
+            )
+
             if audio_parts and start_time_s is not None:
                 self.tts_events.append((start_time_s, b"".join(audio_parts)))
-            self.tts_log.info(f"{len(audio_parts)} chunks for: {sentence!r}")
+                if phrase is not None:
+                    save_cached_audio(phrase, lang, b"".join(audio_parts), PCM_SAMPLE_RATE)
+                    self.tts_log.info(f"[CACHE] saved {phrase.slug!r}  lang={lang}")
         except Exception as e:
-            self.tts_log.error(f"error on {sentence!r}: {e!r}")
+            self.tts_log.error(f"[SARVAM] error on {sentence!r}: {e!r}")
 
     async def _configure_tts(self, tts_ws, lang: str) -> None:
         self.tts_log.debug(f"configuration: lang={lang}, speaker=shubh, codec=linear16, rate=16000")
@@ -213,7 +282,7 @@ class CallSession:
                     start_time_s = self.loop.time() - self.session_start
                 audio_parts.append(chunk)
                 await self.websocket.send_bytes(chunk)
-                self.tts_log.debug(f"audio chunk received: {len(chunk)} bytes  request_id={msg.data.request_id}")
+                # self.tts_log.debug(f"audio chunk received: {len(chunk)} bytes  request_id={msg.data.request_id}")
             elif isinstance(msg, EventResponse):
                 event_type = getattr(msg.data, "event_type", None)
                 self.tts_log.debug(f"event received: {event_type}")
@@ -231,12 +300,19 @@ class CallSession:
                     self.call_log.info("websocket.disconnect received")
                     break
                 if message.get("bytes"):
+                    # print('receiving audio...')
                     chunk = message["bytes"]
                     self.audio_chunks.append(chunk)
                     if not VAD_GATE_STT or self._speaking:
                         await self.audio_queue.put(chunk)
-                    else:
-                        self.call_log.debug("VAD gate active — audio chunk dropped")
+                    if self.human_agent_ws is not None:
+                        # print('forwarding audio to human agent...')
+                        try:
+                            await self.human_agent_ws.send_bytes(chunk)
+                        except Exception:
+                            self.human_agent_ws = None
+                    # else:
+                    #     self.call_log.debug("VAD gate active — audio chunk dropped")
                 elif message.get("text"):
                     self._handle_text_message(message["text"])
         except WebSocketDisconnect:
@@ -251,7 +327,7 @@ class CallSession:
         if vad.get("type") == "vad":
             was_speaking = self._speaking
             self._speaking = bool(vad.get("speaking"))
-            self.call_log.debug(f"VAD: speaking={self._speaking}")
+            # self.call_log.debug(f"VAD: speaking={self._speaking}")
             if was_speaking != self._speaking:
                 self._emit_status("session_updated")
             if was_speaking and not self._speaking:
@@ -265,8 +341,13 @@ class CallSession:
         self._pending_transcript_parts = []
         self._pending_lang = None
         self.stt_log.info(f"speech ended — processing: {full_text!r}")
-        self.conversation_turns.append({"role": "user", "text": full_text})
+        user_turn = {"role": "user", "text": full_text}
+        self.conversation_turns.append(user_turn)
+        if self.human_takeover:
+            self._emit_status("session_updated")
+            return
         await self._queue_tts_sentences(full_text, lang)
+        user_turn["sentiment"] = self.dialogue_flow.semantic_memory.sentiment.value
         self._emit_status("session_updated")
         if self.dialogue_flow.phase == PHASE.COMPLETE:
             asyncio.create_task(self._end_call())
@@ -281,7 +362,23 @@ class CallSession:
         except Exception as e:
             self.call_log.warning(f"END_CALL close error: {e!r}")
 
-    # ------------------------------------------------------------------ shutdown
+    def set_human_speaking(self, val: bool) -> None:
+        if self._human_speaking == val:
+            return
+        self._human_speaking = val
+        self._emit_status("session_updated")
+
+    # ------------------------------------------------------------------ close / shutdown
+
+    async def close(self) -> None:
+        if self._closed:
+            return
+        self._closed = True
+        self.call_log.info("closing session")
+        try:
+            await self.websocket.close()
+        except Exception:
+            pass
 
     async def shutdown(self) -> None:
         await self.audio_queue.put(None)
@@ -317,6 +414,7 @@ class CallSession:
         try:
             raw_url = await upload_to_r2(raw, f"audio/call_{self.session_id}_{timestamp}.wav")
             if raw_url:
+                self.audio_url = raw_url
                 self.call_log.info(f"raw audio uploaded: {raw_url}")
             else:
                 self.call_log.warning("R2 not configured — raw audio discarded")
@@ -326,6 +424,7 @@ class CallSession:
                 if mixed:
                     mixed_url = await upload_to_r2(mixed, f"audio/call_{self.session_id}_{timestamp}_mixed.wav")
                     if mixed_url:
+                        self.audio_mixed_url = mixed_url
                         self.call_log.info(f"mixed audio uploaded: {mixed_url}")
         except Exception as e:
             import traceback

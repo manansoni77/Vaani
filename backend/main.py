@@ -12,7 +12,9 @@ from audio_utils import R2_ACCOUNT_ID, R2_BUCKET_NAME
 from constants import LOG_ENTITIES
 
 # from llm_pipeline import ConversationState
+from session_registry import register_call, unregister_call
 from logger import get_logger, save_call_session, setup_logging
+from datasets_router import router as datasets_router
 from logs_router import router as logs_router
 from session import CallSession
 from sessions_router import router as sessions_router
@@ -43,6 +45,7 @@ app.add_middleware(
 
 app.include_router(logs_router)
 app.include_router(sessions_router)
+app.include_router(datasets_router)
 
 
 @app.websocket("/call")
@@ -62,10 +65,12 @@ async def call(websocket: WebSocket):
         session_start=loop.time(),
         # conversationState=conversationState
     )
+    register_call(session_id, session)
     session._emit_status("session_started")
     try:
         await session.run()
     finally:
+        await unregister_call(session_id)
         session._emit_status("session_ended")
         mem = session.dialogue_flow.semantic_memory
         save_call_session(
@@ -78,7 +83,12 @@ async def call(websocket: WebSocket):
             sentiment=mem.sentiment.value,
             urgency_level=mem.urgency_level.value,
             human_requested=mem.human_requested,
-            transcript="\n".join(
-                f"{t['role']}: {t['text']}" for t in session.conversation_turns
-            ),
+            transcript=session._format_transcript(),
+            audio_url=session.audio_url,
+            audio_mixed_url=session.audio_mixed_url,
+            summary=mem.summary,
+            intent=mem.intent,
+            key_details=mem.key_details,
+            agent_confidence=session.dialogue_flow.agent_confidence.value if session.dialogue_flow.agent_confidence else None,
+            user_confidence=session.dialogue_flow.user_confidence.value if session.dialogue_flow.user_confidence else None,
         )
