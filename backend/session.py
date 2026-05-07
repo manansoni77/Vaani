@@ -45,6 +45,7 @@ class CallSession:
     _ai_speaking:    bool = field(default=False, init=False)
     _human_speaking: bool = field(default=False, init=False)
     _closed:         bool = field(default=False, init=False)
+    _ended:          bool = field(default=False, init=False)
     _pending_transcript_parts: list[str] = field(default_factory=list, init=False)
     _pending_lang: str | None            = field(default=None,         init=False)
     human_takeover: bool                 = field(default=False,        init=False)
@@ -60,6 +61,8 @@ class CallSession:
         self.tts_log  = get_logger(LOG_ENTITIES.SARVAM_TTS, session_id=sid)
 
     def _emit_status(self, event_type: str) -> None:
+        if self._ended:
+            return
         mem = self.dialogue_flow.semantic_memory
         transcript = "\n".join(
             f"{t['role']}: {t['text']}" for t in self.conversation_turns
@@ -81,6 +84,8 @@ class CallSession:
             claimed_by=self.claimed_by,
         )
         SessionBroadcaster.get().publish(status)
+        if event_type == "session_ended":
+            self._ended = True
 
     # ------------------------------------------------------------------ STT
 
