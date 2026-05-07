@@ -6,7 +6,7 @@ export default function Home() {
       <div className="flex flex-col items-center gap-12 w-full max-w-md">
         <div className="text-center">
           <h1 className="text-4xl font-bold text-slate-900 dark:text-white mb-2">
-            Helpline UI
+            Vaani
           </h1>
           <p className="text-lg text-slate-600 dark:text-slate-400">
             Manage your helpline operations
