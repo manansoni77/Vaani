@@ -77,19 +77,25 @@ class CallSession:
             return
         mem = self.dialogue_flow.semantic_memory
         transcript = self._format_transcript()
+        df = self.dialogue_flow
         status = build_status(
             event_type=event_type,
             session_id=self.session_id,
-            phase=self.dialogue_flow.phase.value,
+            phase=df.phase.value,
             caller_speaking=self._speaking,
             ai_speaking=self._ai_speaking,
             human_speaking=self._human_speaking,
             duration_s=self.loop.time() - self.session_start,
-            turns=self.dialogue_flow.turns,
+            turns=df.turns,
             sentiment=mem.sentiment.value,
             urgency_level=mem.urgency_level.value,
             human_requested=mem.human_requested,
             transcript=transcript,
+            summary=mem.summary,
+            intent=mem.intent,
+            key_details=mem.key_details,
+            agent_confidence=df.agent_confidence.value if df.agent_confidence else None,
+            user_confidence=df.user_confidence.value if df.user_confidence else None,
             human_takeover=self.human_takeover,
             claimed_by=self.claimed_by,
         )

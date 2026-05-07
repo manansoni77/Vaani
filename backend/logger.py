@@ -51,6 +51,11 @@ class CallSessionRecord(Base):
     transcript = Column(Text, nullable=False, default="")
     audio_url = Column(String, nullable=True)
     audio_mixed_url = Column(String, nullable=True)
+    summary = Column(Text, nullable=True)
+    intent = Column(String, nullable=True)
+    key_details = Column(Text, nullable=True)
+    agent_confidence = Column(String, nullable=True)
+    user_confidence = Column(String, nullable=True)
 
 
 def save_call_session(
@@ -66,6 +71,11 @@ def save_call_session(
     transcript: str,
     audio_url: str | None = None,
     audio_mixed_url: str | None = None,
+    summary: str | None = None,
+    intent: str | None = None,
+    key_details: str | None = None,
+    agent_confidence: str | None = None,
+    user_confidence: str | None = None,
 ) -> None:
     try:
         with Session(_get_engine()) as db_session:
@@ -82,6 +92,11 @@ def save_call_session(
                 transcript=transcript,
                 audio_url=audio_url,
                 audio_mixed_url=audio_mixed_url,
+                summary=summary,
+                intent=intent,
+                key_details=key_details,
+                agent_confidence=agent_confidence,
+                user_confidence=user_confidence,
             ))
             db_session.commit()
     except Exception:

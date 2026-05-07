@@ -30,6 +30,11 @@ class CallSessionOut(BaseModel):
     transcript: str
     audio_url: str | None = None
     audio_mixed_url: str | None = None
+    summary: str | None = None
+    intent: str | None = None
+    key_details: str | None = None
+    agent_confidence: str | None = None
+    user_confidence: str | None = None
 
     model_config = {"from_attributes": True}
 

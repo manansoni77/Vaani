@@ -84,4 +84,9 @@ async def call(websocket: WebSocket):
             transcript=session._format_transcript(),
             audio_url=session.audio_url,
             audio_mixed_url=session.audio_mixed_url,
+            summary=mem.summary,
+            intent=mem.intent,
+            key_details=mem.key_details,
+            agent_confidence=session.dialogue_flow.agent_confidence.value if session.dialogue_flow.agent_confidence else None,
+            user_confidence=session.dialogue_flow.user_confidence.value if session.dialogue_flow.user_confidence else None,
         )

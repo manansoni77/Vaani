@@ -14,6 +14,8 @@ class DialogueFlow:
         self.phase = PHASE.GREETING
         self.semantic_memory = SemanticMemory()
         self.turns = 0
+        self.agent_confidence: CONFIDENCE_LEVEL | None = None
+        self.user_confidence: CONFIDENCE_LEVEL | None = None
         self.log = get_logger(LOG_ENTITIES.DIALOGUE_FLOW, session_id=session_id)
 
     async def get_response(self, input_text):
@@ -46,6 +48,7 @@ class DialogueFlow:
                 urgency_level=response.urgency_level,
                 human_requested=response.human_requested,
             )
+            self.agent_confidence = response.agent_confidence
             if self.turns >= self.max_turns or response.follow_up == False:
                 if response.agent_confidence in [CONFIDENCE_LEVEL.GREEN, CONFIDENCE_LEVEL.YELLOW]:
                     yield response.response
@@ -65,6 +68,7 @@ class DialogueFlow:
                 response_format=CaptureAndValidationResponse,
             ))
 
+            self.agent_confidence = response.agent_confidence
             self.phase = PHASE.DECISION
             self.log.info("phase transitioning to DECISION")
 
@@ -79,6 +83,7 @@ class DialogueFlow:
             ))
 
             self.phase = PHASE.COMPLETE
+            self.user_confidence = response.user_confidence
             self.log.info(f"phase=COMPLETE user_confidence={response.user_confidence}")
 
             if response.user_confidence in [CONFIDENCE_LEVEL.GREEN, CONFIDENCE_LEVEL.YELLOW]:
