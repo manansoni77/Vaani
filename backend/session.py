@@ -152,6 +152,7 @@ class CallSession:
             if word and word[-1] in ".?!":
                 sentence = " ".join(buf)
                 #translate before queing to TTS 
+
                 translated = await self._translate_to_lang(sentence, lang)
                 self.tts_log.debug(f"queuing sentence: {sentence!r}")
                 await self.tts_queue.put((translated, lang))
@@ -286,17 +287,30 @@ class CallSession:
         if not self._pending_transcript_parts:
             return
         full_text = " ".join(self._pending_transcript_parts)
-        lang = self._pending_lang or "en-IN" # here we have lang which is the pending language identified from the user input.
+        raw_lang = self._pending_lang  # here we have lang which is the pending language identified from the user input.
+        lang = raw_lang or "en-IN"
         self._pending_transcript_parts = []
         self._pending_lang = None
         self.stt_log.info(f"speech ended — processing: {full_text!r}")
         self.conversation_turns.append({"role": "user", "text": full_text})
 
-        self.dialogue_flow.semantic_memory.user_language = lang
-        #Semantic memory updated with the language identified from the user input, this will help the model to respond in the same language as the user and also to understand the nuances of that language which will improve the overall understanding and response quality.
+        # lock only after first substantive CAPTURE turn completes
+        # dialogue_flow.turns increments after turn 1 is processed
+        if not self._lang_locked and self.dialogue_flow.turns >= 1:
+            self.dialogue_flow.semantic_memory.user_language = lang
+            self._lang_locked = True
+            self.call_log.info(f"language locked for session after first capture turn: {lang!r}")
+        elif not self._lang_locked:
+            # still in greeting/first turn — update but don't lock yet
+            self.dialogue_flow.semantic_memory.user_language = lang
+            self.call_log.info(f"language updated (not locked yet): {lang!r}")
+        else:
+            self.call_log.info(f"language already locked as {self.dialogue_flow.semantic_memory.user_language!r} — ignoring {lang!r}")
+
         if self.human_takeover:
             self._emit_status("session_updated")
             return
+
         await self._queue_tts_sentences(full_text, lang)
         self._emit_status("session_updated")
         if self.dialogue_flow.phase == PHASE.COMPLETE:
