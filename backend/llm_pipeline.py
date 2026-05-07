@@ -39,6 +39,7 @@ class DialogueFlow:
             ))
 
             self.turns += 1
+            prev_lang = self.semantic_memory.user_language
             self.semantic_memory = SemanticMemory(
                 summary=response.summary,
                 intent=response.intent,
@@ -47,35 +48,46 @@ class DialogueFlow:
                 sentiment=response.sentiment,
                 urgency_level=response.urgency_level,
                 human_requested=response.human_requested,
+                user_language=self.semantic_memory.user_language,   # Forgot to carry forward now its preserved fr!!  
             )
             self.agent_confidence = response.agent_confidence
+            #log 1 
+            self.log.info(f"semantic_memory rebuilt — lang before={prev_lang!r} lang after={self.semantic_memory.user_language!r}")
             if self.turns >= self.max_turns or response.follow_up == False:
                 if response.agent_confidence in [CONFIDENCE_LEVEL.GREEN, CONFIDENCE_LEVEL.YELLOW]:
                     yield response.response
 
-                    self.phase = PHASE.DECISION
-                    self.log.info("phase transitioning to DECISION based on follow_up=false")
+                    self.phase = PHASE.VALIDATION 
+                    #Tranistioning to validation phase tried to handle that through Prompt 
+                    self.log.info("phase transitioning to VALIDATION based on follow_up=false")
                 elif response.agent_confidence == CONFIDENCE_LEVEL.RED:
-                    yield "It seems I am not able to understand your query, let me connect you to a human agent for better assistance."
+                     yield "It seems I am not able to understand your query, let me connect you to a human agent for better assistance."
             else:
                 yield response.response
         elif self.phase == PHASE.VALIDATION:
-            self.log.info(f"phase=VALIDATION input={input_text!r}")
+            self.log.info(f"phase=VALIDATION input={input_text!r} lang={self.semantic_memory.user_language!r}")
             prompt = prompt_fn(input_text, self.semantic_memory)
             response = cast(CaptureAndValidationResponse, await llm_client.get_json_response(
                 system_prompt=prompt[0],
                 user_prompt=prompt[1],
                 response_format=CaptureAndValidationResponse,
             ))
-
+             
             self.agent_confidence = response.agent_confidence
-            self.phase = PHASE.DECISION
-            self.log.info("phase transitioning to DECISION")
 
+            #Adding a follow up loop in Validation phase 
+            if not response.follow_up:
+                self.phase = PHASE.DECISION
+                self.log.info("User confirmed - phase transitioning to DECISION")
+            else:
+                # User denied or was unclear - stay in VALIDATION and ask again
+                self.log.info("User denied or unclear - staying in VALIDATION for follow-up")
             yield response.response
+
+
         elif self.phase == PHASE.DECISION:
-            self.log.info(f"phase=DECISION input={input_text!r}")
-            prompt = prompt_fn(input_text)
+            self.log.info(f"phase=DECISION input={input_text!r} lang={self.semantic_memory.user_language!r}")
+            prompt = prompt_fn(input_text, self.semantic_memory) # Added semantic memory to the decision prompt to preserve the user language 
             response = cast(DecisionResponse, await llm_client.get_json_response(
                 system_prompt=prompt[0],
                 user_prompt=prompt[1],
