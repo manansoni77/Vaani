@@ -8,8 +8,9 @@ from datetime import datetime, timezone
 from fastapi import WebSocket, WebSocketDisconnect
 from sarvamai import AsyncSarvamAI, AudioOutput, EventResponse
 
+from audio_cache import load_cached_audio, pcm_chunks, save_cached_audio
 from audio_utils import PCM_SAMPLE_RATE, mix_wav_bytes, upload_to_r2, wav_bytes
-from constants import LOG_ENTITIES, PHASE
+from constants import LOG_ENTITIES, PHASE, PRERECORDED_AUDIO
 # from llm_pipeline import VoiceIntelligencePipeline, ConversationState
 # from llm import LLMClient
 from llm_pipeline import DialogueFlow
@@ -208,8 +209,33 @@ class CallSession:
                 self._emit_status("session_updated")
 
     async def _synthesise_sentence(self, sarvam: AsyncSarvamAI, sentence: str, lang: str) -> None:
+        phrase = PRERECORDED_AUDIO.from_text(sentence)
+
+        if phrase is not None:
+            cached = load_cached_audio(phrase, lang)
+            if cached is not None:
+                start_time_s = self.loop.time() - self.session_start
+                chunks = pcm_chunks(cached)
+                total_bytes = sum(len(c) for c in chunks)
+                self.tts_log.info(
+                    f"[CACHE] streaming {phrase.slug!r}  lang={lang}"
+                    f"  chunks={len(chunks)}  bytes={total_bytes}"
+                )
+                for chunk in chunks:
+                    await self.websocket.send_bytes(chunk)
+                if chunks:
+                    self.tts_events.append((start_time_s, b"".join(chunks)))
+                self.tts_log.info(f"[CACHE] done streaming {phrase.slug!r}")
+                return
+            else:
+                self.tts_log.info(
+                    f"[CACHE] miss for {phrase.slug!r}  lang={lang} — falling back to Sarvam TTS"
+                )
+        else:
+            self.tts_log.info(f"[SARVAM] dynamic sentence: {sentence!r}  lang={lang}")
+
         try:
-            self.tts_log.info(f"connecting for: {sentence!r}  lang={lang}")
+            self.tts_log.info(f"[SARVAM] connecting for: {sentence!r}  lang={lang}")
             async with sarvam.text_to_speech_streaming.connect(
                 model="bulbul:v3", send_completion_event=True
             ) as tts_ws:
@@ -218,11 +244,18 @@ class CallSession:
                 await tts_ws.flush()
                 audio_parts, start_time_s = await self._collect_tts_audio(tts_ws)
 
+            total_bytes = sum(len(p) for p in audio_parts)
+            self.tts_log.info(
+                f"[SARVAM] done: {sentence!r}  chunks={len(audio_parts)}  bytes={total_bytes}"
+            )
+
             if audio_parts and start_time_s is not None:
                 self.tts_events.append((start_time_s, b"".join(audio_parts)))
-            self.tts_log.info(f"{len(audio_parts)} chunks for: {sentence!r}")
+                if phrase is not None:
+                    save_cached_audio(phrase, lang, b"".join(audio_parts), PCM_SAMPLE_RATE)
+                    self.tts_log.info(f"[CACHE] saved {phrase.slug!r}  lang={lang}")
         except Exception as e:
-            self.tts_log.error(f"error on {sentence!r}: {e!r}")
+            self.tts_log.error(f"[SARVAM] error on {sentence!r}: {e!r}")
 
     async def _configure_tts(self, tts_ws, lang: str) -> None:
         self.tts_log.debug(f"configuration: lang={lang}, speaker=shubh, codec=linear16, rate=16000")
