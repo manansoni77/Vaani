@@ -32,6 +32,12 @@ export default function Home() {
           >
             📋 Audit Logs
           </Link>
+          <Link
+            href="/dataset"
+            className="flex items-center justify-center px-6 py-4 bg-indigo-600 hover:bg-indigo-700 text-white font-semibold rounded-lg transition-colors shadow-md hover:shadow-lg"
+          >
+            🗄️ Datasets
+          </Link>
         </div>
       </div>
     </div>
