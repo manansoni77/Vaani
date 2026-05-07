@@ -41,8 +41,10 @@ class CallSession:
 
     stt_handle: asyncio.Task | None = field(default=None,  init=False)
     tts_handle: asyncio.Task | None = field(default=None,  init=False)
-    _speaking:  bool               = field(default=False, init=False)
-    _closed:    bool               = field(default=False, init=False)
+    _speaking:       bool = field(default=False, init=False)
+    _ai_speaking:    bool = field(default=False, init=False)
+    _human_speaking: bool = field(default=False, init=False)
+    _closed:         bool = field(default=False, init=False)
     _pending_transcript_parts: list[str] = field(default_factory=list, init=False)
     _pending_lang: str | None            = field(default=None,         init=False)
     human_takeover: bool                 = field(default=False,        init=False)
@@ -66,7 +68,9 @@ class CallSession:
             event_type=event_type,
             session_id=self.session_id,
             phase=self.dialogue_flow.phase.value,
-            speaking=self._speaking,
+            caller_speaking=self._speaking,
+            ai_speaking=self._ai_speaking,
+            human_speaking=self._human_speaking,
             duration_s=self.loop.time() - self.session_start,
             turns=self.dialogue_flow.turns,
             sentiment=mem.sentiment.value,
@@ -180,8 +184,14 @@ class CallSession:
                 self.tts_queue.task_done()
                 break
             sentence, lang = item
+            if not self._ai_speaking:
+                self._ai_speaking = True
+                self._emit_status("session_updated")
             await self._synthesise_sentence(sarvam, sentence, lang)
             self.tts_queue.task_done()
+            if self.tts_queue.empty():
+                self._ai_speaking = False
+                self._emit_status("session_updated")
 
     async def _synthesise_sentence(self, sarvam: AsyncSarvamAI, sentence: str, lang: str) -> None:
         try:
@@ -296,6 +306,12 @@ class CallSession:
             await self.websocket.close()
         except Exception as e:
             self.call_log.warning(f"END_CALL close error: {e!r}")
+
+    def set_human_speaking(self, val: bool) -> None:
+        if self._human_speaking == val:
+            return
+        self._human_speaking = val
+        self._emit_status("session_updated")
 
     # ------------------------------------------------------------------ close / shutdown
 

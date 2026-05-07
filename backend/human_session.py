@@ -53,6 +53,7 @@ class HumanAgentSession:
             await self._receive_loop()
         finally:
             self.call_session.human_agent_ws = None
+            self.call_session.set_human_speaking(False)
             self.log.info("cleared call_session.human_agent_ws")
             await self._audio_queue.put(None)
             if stt_handle:
@@ -97,6 +98,7 @@ class HumanAgentSession:
             was_speaking = self._speaking
             self._speaking = bool(data.get("speaking"))
             self.log.debug(f"VAD: speaking={self._speaking}")
+            self.call_session.set_human_speaking(self._speaking)
             if was_speaking and not self._speaking:
                 await self._flush_transcript()
 
