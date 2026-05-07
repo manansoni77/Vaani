@@ -70,11 +70,17 @@ class DialogueFlow:
                 user_prompt=prompt[1],
                 response_format=CaptureAndValidationResponse,
             ))
-
-            self.phase = PHASE.DECISION
-            self.log.info("phase transitioning to DECISION")
-
+             
+            #Adding a follow up loop in Validation phase 
+            if not response.follow_up:
+                self.phase = PHASE.DECISION
+                self.log.info("User confirmed - phase transitioning to DECISION")
+            else:
+                # User denied or was unclear - stay in VALIDATION and ask again
+                self.log.info("User denied or unclear - staying in VALIDATION for follow-up")
             yield response.response
+
+
         elif self.phase == PHASE.DECISION:
             self.log.info(f"phase=DECISION input={input_text!r} lang={self.semantic_memory.user_language!r}")
             prompt = prompt_fn(input_text, self.semantic_memory) # Added semantic memory to the decision prompt to preserve the user language 
