@@ -14,6 +14,7 @@ from constants import LOG_ENTITIES
 # from llm_pipeline import ConversationState
 from session_registry import register_call, unregister_call
 from logger import get_logger, save_call_session, setup_logging
+from datasets_router import router as datasets_router
 from logs_router import router as logs_router
 from session import CallSession
 from sessions_router import router as sessions_router
@@ -44,6 +45,7 @@ app.add_middleware(
 
 app.include_router(logs_router)
 app.include_router(sessions_router)
+app.include_router(datasets_router)
 
 
 @app.websocket("/call")
