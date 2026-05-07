@@ -586,6 +586,7 @@ function DetailPanel({
   const processorRef = useRef<ScriptProcessorNode | null>(null);
   const speakingRef = useRef(false);
   const nextPlayTimeRef = useRef(0);
+  const vadDebounceRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   const isMyClaim =
     live && !!session.human_takeover && session.claimed_by === agentId;
@@ -688,19 +689,40 @@ function DetailPanel({
         audioCtxRef.current?.close().catch(() => {});
       }
       audioWsRef.current?.close();
+      if (vadDebounceRef.current) {
+        clearTimeout(vadDebounceRef.current);
+        vadDebounceRef.current = null;
+      }
       setAudioConnected(false);
       setSpeaking(false);
+      speakingRef.current = false;
       nextPlayTimeRef.current = 0;
     };
   }, [isMyClaim, session.session_id, agentId]);
 
   const sendVad = (isSpeaking: boolean) => {
-    speakingRef.current = isSpeaking;
-    const ws = audioWsRef.current;
-    if (ws?.readyState === WebSocket.OPEN) {
-      ws.send(JSON.stringify({ type: "vad", speaking: isSpeaking }));
+    if (isSpeaking) {
+      if (vadDebounceRef.current) {
+        clearTimeout(vadDebounceRef.current);
+        vadDebounceRef.current = null;
+      }
+      speakingRef.current = true;
+      const ws = audioWsRef.current;
+      if (ws?.readyState === WebSocket.OPEN) {
+        ws.send(JSON.stringify({ type: "vad", speaking: true }));
+      }
+      setSpeaking(true);
+    } else {
+      vadDebounceRef.current = setTimeout(() => {
+        vadDebounceRef.current = null;
+        speakingRef.current = false;
+        const ws = audioWsRef.current;
+        if (ws?.readyState === WebSocket.OPEN) {
+          ws.send(JSON.stringify({ type: "vad", speaking: false }));
+        }
+        setSpeaking(false);
+      }, 200);
     }
-    setSpeaking(isSpeaking);
   };
 
   const handleTakeover = async () => {
