@@ -54,6 +54,7 @@ class CallSession:
     human_takeover: bool                 = field(default=False,        init=False)
     claimed_by: str | None               = field(default=None,         init=False)
     human_agent_ws: WebSocket | None     = field(default=None,         init=False)
+    _lang_locked: bool = field(default=False, init=False)
 
     def __post_init__(self) -> None:
         sid = self.session_id
@@ -162,6 +163,8 @@ class CallSession:
         lang = getattr(data, "language_code", None) or "en-IN"
         if not text:
             return
+        #log testing 2 
+        self.stt_log.info(f"raw data fields: {data.__dict__}")
         self.stt_log.info(f"transcript chunk: {text}  lang={lang}")
         self.transcript_parts.append(text)
         self._pending_transcript_parts.append(text)
@@ -176,18 +179,38 @@ class CallSession:
             buf.append(word)
             if word and word[-1] in ".?!":
                 sentence = " ".join(buf)
+                #translate before queing to TTS 
+
+                translated = await self._translate_to_lang(sentence, lang)
                 self.tts_log.debug(f"queuing sentence: {sentence!r}")
-                await self.tts_queue.put((sentence, lang))
-                agent_parts.append(sentence)
+                await self.tts_queue.put((translated, lang))
+                agent_parts.append(translated)
                 buf = []
         if buf:
             sentence = " ".join(buf)
+            translated = await self._translate_to_lang(sentence, lang)
             self.tts_log.debug(f"queuing final fragment: {sentence!r}")
-            await self.tts_queue.put((sentence, lang))
-            agent_parts.append(sentence)
+            await self.tts_queue.put((translated, lang))
+            agent_parts.append(translated)
 
         if agent_parts:
             self.conversation_turns.append({"role": "agent", "text": " ".join(agent_parts)})
+
+    async def _translate_to_lang(self, text: str, target_lang: str) -> str:
+        if target_lang == "en-IN":
+            return text  # no translation needed
+        try:
+            sarvam = AsyncSarvamAI(api_subscription_key=SARVAM_API_KEY)
+            result = await sarvam.text.translate(
+                input=text,
+                source_language_code="en-IN",
+                target_language_code=target_lang,
+            )
+            self.call_log.info(f"translated to {target_lang!r}: {text!r} → {result.translated_text!r}")
+            return result.translated_text
+        except Exception as e:
+            self.call_log.error(f"translation failed: {e!r} — using original")
+            return text  # fallback to original on error
 
     # ------------------------------------------------------------------ TTS
 
@@ -264,7 +287,7 @@ class CallSession:
             self.tts_log.error(f"[SARVAM] error on {sentence!r}: {e!r}")
 
     async def _configure_tts(self, tts_ws, lang: str) -> None:
-        self.tts_log.debug(f"configuration: lang={lang}, speaker=shubh, codec=linear16, rate=16000")
+        self.tts_log.debug(f"configuration: lang={lang}, speaker={SARVAM_SPEAKER_PROFILE}, codec=linear16, rate=16000")
         await tts_ws.configure(
             target_language_code=lang,
             speaker=SARVAM_SPEAKER_PROFILE,
@@ -337,15 +360,30 @@ class CallSession:
         if not self._pending_transcript_parts:
             return
         full_text = " ".join(self._pending_transcript_parts)
-        lang = self._pending_lang or "en-IN"
+        raw_lang = self._pending_lang  # here we have lang which is the pending language identified from the user input.
+        lang = raw_lang or "en-IN"
         self._pending_transcript_parts = []
         self._pending_lang = None
         self.stt_log.info(f"speech ended — processing: {full_text!r}")
         user_turn = {"role": "user", "text": full_text}
         self.conversation_turns.append(user_turn)
+
+        # lock only after first substantive CAPTURE turn completes
+        # dialogue_flow.turns increments after turn 1 is processed
+        if not self._lang_locked and self.dialogue_flow.turns >= 1:
+            self.dialogue_flow.semantic_memory.user_language = lang
+            self._lang_locked = True
+            self.call_log.info(f"language locked for session after first capture turn: {lang!r}")
+        elif not self._lang_locked:
+            # still in greeting/first turn — update but don't lock yet
+            self.dialogue_flow.semantic_memory.user_language = lang
+            self.call_log.info(f"language updated (not locked yet): {lang!r}")
+        else:
+            self.call_log.info(f"language already locked as {self.dialogue_flow.semantic_memory.user_language!r} — ignoring {lang!r}")
         if self.human_takeover:
             self._emit_status("session_updated")
             return
+
         await self._queue_tts_sentences(full_text, lang)
         user_turn["sentiment"] = self.dialogue_flow.semantic_memory.sentiment.value
         self._emit_status("session_updated")
