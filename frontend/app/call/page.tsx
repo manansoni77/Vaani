@@ -42,6 +42,9 @@ export default function CallPage() {
   const agentPlayingRef = useRef(false);
   const silenceTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const nextPlayTimeRef = useRef(0);
+  const activeSourcesRef = useRef<Set<AudioBufferSourceNode>>(new Set());
+  const muteGainRef = useRef<GainNode | null>(null);
+  const chunkCountRef = useRef(0);
 
   const addLog = useCallback((msg: string) => {
     const time = new Date().toLocaleTimeString();
@@ -51,6 +54,8 @@ export default function CallPage() {
   const cleanup = useCallback(() => {
     processorRef.current?.disconnect();
     processorRef.current = null;
+    muteGainRef.current?.disconnect();
+    muteGainRef.current = null;
     streamRef.current?.getTracks().forEach((t) => t.stop());
     streamRef.current = null;
   }, []);
@@ -69,10 +74,24 @@ export default function CallPage() {
     addLog("Call ended.");
   }, [addLog, cleanup]);
 
+  const stopAgentAudio = useCallback(() => {
+    const count = activeSourcesRef.current.size;
+    for (const src of activeSourcesRef.current) {
+      try { src.stop(); } catch {}
+    }
+    activeSourcesRef.current.clear();
+    nextPlayTimeRef.current = 0;
+    agentPlayingRef.current = false;
+    addLog(`[TTS] interrupted — stopped ${count} scheduled source(s)`);
+  }, [addLog]);
+
   const playPcmChunk = useCallback((data: ArrayBuffer) => {
     try {
       const ctx = audioCtxRef.current;
-      if (!ctx || ctx.state === "closed") return;
+      if (!ctx || ctx.state === "closed") {
+        addLog(`[TTS] chunk dropped — ctx ${ctx ? ctx.state : "null"}`);
+        return;
+      }
 
       const int16 = new Int16Array(data);
       const float32 = new Float32Array(int16.length);
@@ -88,21 +107,32 @@ export default function CallPage() {
       source.connect(ctx.destination);
 
       const startTime = Math.max(ctx.currentTime, nextPlayTimeRef.current);
+      const lag = startTime - ctx.currentTime;
       source.start(startTime);
       nextPlayTimeRef.current = startTime + buffer.duration;
 
+      activeSourcesRef.current.add(source);
+      const wasPlaying = agentPlayingRef.current;
       if (!agentPlayingRef.current) {
         agentPlayingRef.current = true;
         setSpeaker("agent");
+        addLog(`[TTS] agent audio started — chunk ${(data.byteLength / 1024).toFixed(1)} KB, dur ${buffer.duration.toFixed(3)}s`);
+      } else {
+        addLog(`[TTS] chunk queued — ${(data.byteLength / 1024).toFixed(1)} KB, dur ${buffer.duration.toFixed(3)}s, lag ${lag.toFixed(3)}s, queue ${activeSourcesRef.current.size}`);
       }
+      void wasPlaying;
+
       source.onended = () => {
+        activeSourcesRef.current.delete(source);
         if (nextPlayTimeRef.current <= ctx.currentTime + 0.05) {
           agentPlayingRef.current = false;
-          setSpeaker(prevSpeakingRef.current ? "user" : "silent");
+          const next = prevSpeakingRef.current ? "user" : "silent";
+          setSpeaker(next);
+          addLog(`[TTS] agent audio finished → speaker: ${next}`);
         }
       };
     } catch (err) {
-      addLog(`PCM playback error: ${err}`);
+      addLog(`[TTS] playback error: ${err}`);
     }
   }, [addLog]);
 
@@ -111,6 +141,8 @@ export default function CallPage() {
     prevSpeakingRef.current = false;
     agentPlayingRef.current = false;
     nextPlayTimeRef.current = 0;
+    activeSourcesRef.current.clear();
+    chunkCountRef.current = 0;
     if (silenceTimerRef.current) {
       clearTimeout(silenceTimerRef.current);
       silenceTimerRef.current = null;
@@ -128,6 +160,9 @@ export default function CallPage() {
         video: false,
       });
       streamRef.current = stream;
+      const track = stream.getAudioTracks()[0];
+      const settings = track.getSettings();
+      addLog(`[MIC] granted — "${track.label}", ${settings.sampleRate ?? "?"}Hz, channels: ${settings.channelCount ?? "?"}`);
     } catch {
       addLog("Microphone access denied.");
       setStatus("idle");
@@ -146,9 +181,11 @@ export default function CallPage() {
 
         const ctx = new AudioContext({ sampleRate: 16000 });
         audioCtxRef.current = ctx;
+        addLog(`[CTX] AudioContext created — sampleRate: ${ctx.sampleRate}Hz, state: ${ctx.state}`);
 
         try {
           await ctx.audioWorklet.addModule("/audio-processor.worklet.js");
+          addLog("[CTX] audio worklet module loaded");
         } catch {
           addLog("Failed to load audio worklet.");
           setStatus("disconnected");
@@ -157,35 +194,54 @@ export default function CallPage() {
 
         const micSource = ctx.createMediaStreamSource(stream);
 
+        // Mute gate: gain=0 when muted, gain=1 otherwise.
+        // Zeroes the signal before it reaches the analyser or worklet,
+        // so VAD, encoding, and WS send are all unaware of mute.
+        const muteGain = ctx.createGain();
+        muteGain.gain.value = muteRef.current ? 0 : 1;
+        muteGainRef.current = muteGain;
+        micSource.connect(muteGain);
+
         const analyser = ctx.createAnalyser();
         analyser.fftSize = 512;
-        micSource.connect(analyser);
+        muteGain.connect(analyser);
         const freqBins = new Uint8Array(analyser.frequencyBinCount);
+        const binHz = ctx.sampleRate / analyser.fftSize;
+        const voiceLowBin = Math.round(85 / binHz);
+        const voiceHighBin = Math.round(255 / binHz);
+        addLog(`[CTX] analyser — fftSize: ${analyser.fftSize}, binHz: ${binHz.toFixed(1)}, voice bins: ${voiceLowBin}–${voiceHighBin}, VAD threshold: ${VAD_SILENCE_THRESHOLD}`);
 
         const worklet = new AudioWorkletNode(ctx, "audio-processor");
         processorRef.current = worklet;
+        addLog("[CTX] AudioWorkletNode connected — pipeline: mic → analyser → worklet → WS");
 
         worklet.port.onmessage = (e) => {
-          if (ws.readyState !== WebSocket.OPEN) return;
+          if (ws.readyState !== WebSocket.OPEN) {
+            addLog(`[WS] chunk dropped — ws state: ${ws.readyState}`);
+            return;
+          }
 
           const float32: Float32Array = e.data;
           const int16 = new Int16Array(float32.length);
-          if (!muteRef.current) {
-            for (let i = 0; i < float32.length; i++) {
-              int16[i] = Math.max(-32768, Math.min(32767, float32[i] * 32767));
-            }
+          for (let i = 0; i < float32.length; i++) {
+            int16[i] = Math.max(-32768, Math.min(32767, float32[i] * 32767));
           }
           ws.send(int16.buffer);
-
-          if (muteRef.current) {
-            ws.send(JSON.stringify({ type: "vad", speaking: false }));
-            return;
-          }
 
           analyser.getByteFrequencyData(freqBins);
           const avg = voiceBandAvg(freqBins, ctx.sampleRate, analyser.fftSize);
           const speaking = avg > VAD_SILENCE_THRESHOLD;
           ws.send(JSON.stringify({ type: "vad", speaking }));
+
+          // Periodic stats log every 50 chunks (~400ms at 16kHz/128 frames)
+          chunkCountRef.current += 1;
+          if (chunkCountRef.current % 50 === 0) {
+            addLog(
+              `[MIC] chunk #${chunkCountRef.current} — samples: ${float32.length}, ` +
+              `bytes sent: ${int16.buffer.byteLength}, muted: ${muteRef.current}, ` +
+              `VAD avg: ${avg.toFixed(1)} (${speaking ? "SPEAKING" : "silent"})`
+            );
+          }
 
           if (speaking) {
             if (silenceTimerRef.current) {
@@ -194,18 +250,25 @@ export default function CallPage() {
             }
             if (!prevSpeakingRef.current) {
               prevSpeakingRef.current = true;
-              if (!agentPlayingRef.current) setSpeaker("user");
+              addLog(`[VAD] → SPEAKING (avg: ${avg.toFixed(1)}, muted: ${muteRef.current}, agent playing: ${agentPlayingRef.current})`);
+              if (agentPlayingRef.current) {
+                stopAgentAudio();
+              } else {
+                setSpeaker("user");
+              }
             }
           } else if (prevSpeakingRef.current && !silenceTimerRef.current) {
+            addLog(`[VAD] below threshold (avg: ${avg.toFixed(1)}) — silence debounce started (${VAD_SILENCE_DEBOUNCE_MS}ms)`);
             silenceTimerRef.current = setTimeout(() => {
               silenceTimerRef.current = null;
               prevSpeakingRef.current = false;
+              addLog(`[VAD] → SILENT (debounce elapsed, agent playing: ${agentPlayingRef.current})`);
               if (!agentPlayingRef.current) setSpeaker("silent");
             }, VAD_SILENCE_DEBOUNCE_MS);
           }
         };
 
-        micSource.connect(worklet);
+        muteGain.connect(worklet);
       })();
     };
 
@@ -215,12 +278,15 @@ export default function CallPage() {
           const msg = JSON.parse(e.data) as Record<string, unknown>;
           if (msg.type === "metadata" && typeof msg.session_id === "string") {
             setSessionId(msg.session_id);
-            addLog(`Session ID: ${msg.session_id}`);
+            addLog(`[WS] session ID: ${msg.session_id}`);
+          } else {
+            addLog(`[WS] server msg: ${JSON.stringify(msg)}`);
           }
         } catch {
-          addLog(`Server message: ${e.data}`);
+          addLog(`[WS] raw text: ${e.data}`);
         }
       } else if (e.data instanceof ArrayBuffer) {
+        addLog(`[WS] PCM chunk received — ${(e.data.byteLength / 1024).toFixed(1)} KB`);
         playPcmChunk(e.data);
       }
     };
@@ -234,7 +300,7 @@ export default function CallPage() {
         setStatus("disconnected");
       }
     };
-  }, [addLog, cleanup, playPcmChunk]);
+  }, [addLog, cleanup, playPcmChunk, stopAgentAudio]);
 
   useEffect(() => {
     return () => {
@@ -316,6 +382,10 @@ export default function CallPage() {
                   onClick={() => {
                     muteRef.current = !muteRef.current;
                     setMuted(muteRef.current);
+                    if (muteGainRef.current) {
+                      muteGainRef.current.gain.value = muteRef.current ? 0 : 1;
+                    }
+                    addLog(`[MIC] ${muteRef.current ? "MUTED" : "UNMUTED"} — gain node set to ${muteRef.current ? "0" : "1"}`);
                   }}
                   aria-label={muted ? "Unmute" : "Mute"}
                   className={`w-14 h-14 rounded-full flex items-center justify-center shadow-md transition-all active:scale-95 ${
