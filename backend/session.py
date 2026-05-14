@@ -57,6 +57,7 @@ class CallSession:
     _tts_stop: bool                      = field(default=False,        init=False)
     _processing_text: str | None         = field(default=None,         init=False)
     _processing_lang: str | None         = field(default=None,         init=False)
+    _current_speech_start: float | None  = field(default=None,         init=False)
     human_takeover: bool                 = field(default=False,        init=False)
     claimed_by: str | None               = field(default=None,         init=False)
     human_agent_ws: WebSocket | None     = field(default=None,         init=False)
@@ -255,10 +256,9 @@ class CallSession:
                 )
                 for chunk in chunks:
                     if self._tts_stop:
-                        return
+                        break
                     await self.websocket.send_bytes(chunk)
-                if chunks:
-                    self.tts_events.append((start_time_s, b"".join(chunks)))
+                self.tts_events.append((start_time_s, b"".join(chunks)))
                 self.tts_log.info(f"[CACHE] done streaming {phrase.slug!r}")
                 return
             else:
@@ -285,7 +285,7 @@ class CallSession:
 
             if audio_parts and start_time_s is not None:
                 self.tts_events.append((start_time_s, b"".join(audio_parts)))
-                if phrase is not None:
+                if phrase is not None and not self._tts_stop:
                     save_cached_audio(phrase, lang, b"".join(audio_parts), PCM_SAMPLE_RATE)
                     self.tts_log.info(f"[CACHE] saved {phrase.slug!r}  lang={lang}")
         except Exception as e:
@@ -361,23 +361,31 @@ class CallSession:
             if was_speaking != self._speaking:
                 self._emit_status("session_updated")
             if not was_speaking and self._speaking:
+                self._current_speech_start = self.loop.time() - self.session_start
                 self._interrupt_if_processing()
             if was_speaking and not self._speaking:
                 self._process_task = asyncio.create_task(self._flush_pending_transcript())
 
     def _interrupt_if_processing(self) -> None:
         """Cancel in-flight LLM/TTS processing when user starts speaking again."""
-        if self._process_task is None or self._process_task.done():
-            return
-        self._interrupted_text = self._processing_text
-        self._interrupted_lang = self._processing_lang
-        self._process_task.cancel()
-        self._tts_stop = True
-        self._drain_tts_queue()
-        if self._ai_speaking:
+        if self._process_task and not self._process_task.done():
+            # LLM still running — cancel and save text for combining on next flush
+            self._interrupted_text = self._processing_text
+            self._interrupted_lang = self._processing_lang
+            self._process_task.cancel()
+            self._tts_stop = True
+            self._drain_tts_queue()
+            if self._ai_speaking:
+                self._ai_speaking = False
+                self._emit_status("session_updated")
+            self.call_log.info(f"processing interrupted — saved text: {self._interrupted_text!r}")
+        elif self._ai_speaking:
+            # LLM done, agent turn complete — stop TTS and process user reply as a fresh turn
+            self._tts_stop = True
+            self._drain_tts_queue()
             self._ai_speaking = False
             self._emit_status("session_updated")
-        self.call_log.info(f"processing interrupted — saved text: {self._interrupted_text!r}")
+            self.call_log.info("TTS interrupted by user — stopping playback")
 
     def _drain_tts_queue(self) -> None:
         drained = 0
@@ -390,6 +398,7 @@ class CallSession:
                 break
         if drained:
             self.call_log.info(f"drained {drained} queued TTS sentences")
+
 
     async def _flush_pending_transcript(self) -> None:
         if not self._pending_transcript_parts:
@@ -417,7 +426,7 @@ class CallSession:
         self._tts_stop = False
 
         self.stt_log.info(f"speech ended — processing: {full_text!r}")
-        user_turn = {"role": "user", "text": full_text}
+        user_turn = {"role": "user", "text": full_text, "start_time_s": self._current_speech_start}
         self.conversation_turns.append(user_turn)
 
         # lock only after first substantive CAPTURE turn completes
@@ -526,7 +535,11 @@ class CallSession:
                 self.call_log.warning("R2 not configured — raw audio discarded")
 
             if self.tts_events:
-                mixed = mix_wav_bytes(raw, self.tts_events)
+                user_speech_times = [
+                    t["start_time_s"] for t in self.conversation_turns
+                    if t.get("role") == "user" and t.get("start_time_s") is not None
+                ]
+                mixed = mix_wav_bytes(raw, self.tts_events, user_speech_times=user_speech_times)
                 if mixed:
                     mixed_url = await upload_to_r2(mixed, f"audio/call_{self.session_id}_{timestamp}_mixed.wav")
                     if mixed_url:
