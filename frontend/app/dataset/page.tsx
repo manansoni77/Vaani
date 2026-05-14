@@ -451,7 +451,7 @@ function CellValue({ value }: { value: DatasetSample[string] }) {
 
   if (!isLong) {
     return (
-      <span className="text-slate-700 dark:text-slate-300 break-words">
+      <span className="text-slate-700 dark:text-slate-300 wrap-break-word">
         {str}
       </span>
     );
@@ -460,7 +460,7 @@ function CellValue({ value }: { value: DatasetSample[string] }) {
   return (
     <div className="flex flex-col gap-1">
       <span
-        className={`text-slate-700 dark:text-slate-300 whitespace-pre-wrap break-words leading-relaxed ${
+        className={`text-slate-700 dark:text-slate-300 whitespace-pre-wrap wrap-break-word leading-relaxed ${
           expanded ? "" : "line-clamp-3"
         }`}
       >
