@@ -106,6 +106,10 @@ class CallSession:
             user_confidence=df.user_confidence.value if df.user_confidence else None,
             human_takeover=self.human_takeover,
             claimed_by=self.claimed_by,
+            query_type=mem.query_type.value if mem.query_type else None,
+            service_type=mem.service_type.value if mem.service_type else None,
+            location=mem.location,
+            since_when=mem.since_when,
         )
         SessionBroadcaster.get().publish(status)
         if event_type == "session_ended":

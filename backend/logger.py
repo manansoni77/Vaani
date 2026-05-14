@@ -56,6 +56,7 @@ class CallSessionRecord(Base):
     key_details = Column(Text, nullable=True)
     agent_confidence = Column(String, nullable=True)
     user_confidence = Column(String, nullable=True)
+    query_type = Column(String, nullable=True)
 
 
 def save_call_session(
@@ -76,6 +77,7 @@ def save_call_session(
     key_details: str | None = None,
     agent_confidence: str | None = None,
     user_confidence: str | None = None,
+    query_type: str | None = None,
 ) -> None:
     try:
         with Session(_get_engine()) as db_session:
@@ -97,6 +99,7 @@ def save_call_session(
                 key_details=key_details,
                 agent_confidence=agent_confidence,
                 user_confidence=user_confidence,
+                query_type=query_type,
             ))
             db_session.commit()
     except Exception:
