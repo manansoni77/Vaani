@@ -1,6 +1,6 @@
 from typing import cast
 from llm import LLMClient
-from constants import CONFIDENCE_LEVEL, PHASE, CaptureAndValidationResponse, DecisionResponse, SemanticMemory, LOG_ENTITIES
+from constants import CONFIDENCE_LEVEL, PHASE, QUERY_TYPE, CaptureAndValidationResponse, DecisionResponse, SemanticMemory, LOG_ENTITIES
 from prompts import PROMPTS
 from logger import get_logger
 
@@ -66,11 +66,17 @@ class DialogueFlow:
                 sentiment=response.sentiment,
                 urgency_level=response.urgency_level,
                 human_requested=response.human_requested,
-                user_language=self.semantic_memory.user_language,   # Forgot to carry forward now its preserved fr!!  
+                user_language=self.semantic_memory.user_language,  # preserved, not overwritten by LLM
+                query_type=response.query_type,
+                service_type=response.service_type,
+                location=response.location,
+                since_when=response.since_when,
             )
             self.agent_confidence = response.agent_confidence
             #log 1 
             self.log.info(f"semantic_memory rebuilt — lang before={prev_lang!r} lang after={self.semantic_memory.user_language!r}")
+            if self.semantic_memory.query_type == QUERY_TYPE.EMERGENCY:
+                self.max_turns = min(self.max_turns, 2)  # one-way ratchet — never resets back up
             if self.turns >= self.max_turns or response.follow_up == False:
                 if response.agent_confidence in [CONFIDENCE_LEVEL.GREEN, CONFIDENCE_LEVEL.YELLOW]:
                     yield response.response
