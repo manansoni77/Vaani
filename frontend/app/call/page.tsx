@@ -44,7 +44,6 @@ export default function CallPage() {
   const nextPlayTimeRef = useRef(0);
   const activeSourcesRef = useRef<Set<AudioBufferSourceNode>>(new Set());
   const muteGainRef = useRef<GainNode | null>(null);
-  const chunkCountRef = useRef(0);
 
   const addLog = useCallback((msg: string) => {
     const time = new Date().toLocaleTimeString();
@@ -75,23 +74,18 @@ export default function CallPage() {
   }, [addLog, cleanup]);
 
   const stopAgentAudio = useCallback(() => {
-    const count = activeSourcesRef.current.size;
     for (const src of activeSourcesRef.current) {
       try { src.stop(); } catch {}
     }
     activeSourcesRef.current.clear();
     nextPlayTimeRef.current = 0;
     agentPlayingRef.current = false;
-    addLog(`[TTS] interrupted — stopped ${count} scheduled source(s)`);
-  }, [addLog]);
+  }, []);
 
   const playPcmChunk = useCallback((data: ArrayBuffer) => {
     try {
       const ctx = audioCtxRef.current;
-      if (!ctx || ctx.state === "closed") {
-        addLog(`[TTS] chunk dropped — ctx ${ctx ? ctx.state : "null"}`);
-        return;
-      }
+      if (!ctx || ctx.state === "closed") return;
 
       const int16 = new Int16Array(data);
       const float32 = new Float32Array(int16.length);
@@ -107,32 +101,24 @@ export default function CallPage() {
       source.connect(ctx.destination);
 
       const startTime = Math.max(ctx.currentTime, nextPlayTimeRef.current);
-      const lag = startTime - ctx.currentTime;
       source.start(startTime);
       nextPlayTimeRef.current = startTime + buffer.duration;
 
       activeSourcesRef.current.add(source);
-      const wasPlaying = agentPlayingRef.current;
       if (!agentPlayingRef.current) {
         agentPlayingRef.current = true;
         setSpeaker("agent");
-        addLog(`[TTS] agent audio started — chunk ${(data.byteLength / 1024).toFixed(1)} KB, dur ${buffer.duration.toFixed(3)}s`);
-      } else {
-        addLog(`[TTS] chunk queued — ${(data.byteLength / 1024).toFixed(1)} KB, dur ${buffer.duration.toFixed(3)}s, lag ${lag.toFixed(3)}s, queue ${activeSourcesRef.current.size}`);
       }
-      void wasPlaying;
 
       source.onended = () => {
         activeSourcesRef.current.delete(source);
         if (nextPlayTimeRef.current <= ctx.currentTime + 0.05) {
           agentPlayingRef.current = false;
-          const next = prevSpeakingRef.current ? "user" : "silent";
-          setSpeaker(next);
-          addLog(`[TTS] agent audio finished → speaker: ${next}`);
+          setSpeaker(prevSpeakingRef.current ? "user" : "silent");
         }
       };
     } catch (err) {
-      addLog(`[TTS] playback error: ${err}`);
+      addLog(`PCM playback error: ${err}`);
     }
   }, [addLog]);
 
@@ -142,7 +128,6 @@ export default function CallPage() {
     agentPlayingRef.current = false;
     nextPlayTimeRef.current = 0;
     activeSourcesRef.current.clear();
-    chunkCountRef.current = 0;
     if (silenceTimerRef.current) {
       clearTimeout(silenceTimerRef.current);
       silenceTimerRef.current = null;
@@ -160,9 +145,6 @@ export default function CallPage() {
         video: false,
       });
       streamRef.current = stream;
-      const track = stream.getAudioTracks()[0];
-      const settings = track.getSettings();
-      addLog(`[MIC] granted — "${track.label}", ${settings.sampleRate ?? "?"}Hz, channels: ${settings.channelCount ?? "?"}`);
     } catch {
       addLog("Microphone access denied.");
       setStatus("idle");
@@ -181,11 +163,9 @@ export default function CallPage() {
 
         const ctx = new AudioContext({ sampleRate: 16000 });
         audioCtxRef.current = ctx;
-        addLog(`[CTX] AudioContext created — sampleRate: ${ctx.sampleRate}Hz, state: ${ctx.state}`);
 
         try {
           await ctx.audioWorklet.addModule("/audio-processor.worklet.js");
-          addLog("[CTX] audio worklet module loaded");
         } catch {
           addLog("Failed to load audio worklet.");
           setStatus("disconnected");
@@ -206,20 +186,12 @@ export default function CallPage() {
         analyser.fftSize = 512;
         muteGain.connect(analyser);
         const freqBins = new Uint8Array(analyser.frequencyBinCount);
-        const binHz = ctx.sampleRate / analyser.fftSize;
-        const voiceLowBin = Math.round(85 / binHz);
-        const voiceHighBin = Math.round(255 / binHz);
-        addLog(`[CTX] analyser — fftSize: ${analyser.fftSize}, binHz: ${binHz.toFixed(1)}, voice bins: ${voiceLowBin}–${voiceHighBin}, VAD threshold: ${VAD_SILENCE_THRESHOLD}`);
 
         const worklet = new AudioWorkletNode(ctx, "audio-processor");
         processorRef.current = worklet;
-        addLog("[CTX] AudioWorkletNode connected — pipeline: mic → analyser → worklet → WS");
 
         worklet.port.onmessage = (e) => {
-          if (ws.readyState !== WebSocket.OPEN) {
-            addLog(`[WS] chunk dropped — ws state: ${ws.readyState}`);
-            return;
-          }
+          if (ws.readyState !== WebSocket.OPEN) return;
 
           const float32: Float32Array = e.data;
           const int16 = new Int16Array(float32.length);
@@ -233,16 +205,6 @@ export default function CallPage() {
           const speaking = avg > VAD_SILENCE_THRESHOLD;
           ws.send(JSON.stringify({ type: "vad", speaking }));
 
-          // Periodic stats log every 50 chunks (~400ms at 16kHz/128 frames)
-          chunkCountRef.current += 1;
-          if (chunkCountRef.current % 50 === 0) {
-            addLog(
-              `[MIC] chunk #${chunkCountRef.current} — samples: ${float32.length}, ` +
-              `bytes sent: ${int16.buffer.byteLength}, muted: ${muteRef.current}, ` +
-              `VAD avg: ${avg.toFixed(1)} (${speaking ? "SPEAKING" : "silent"})`
-            );
-          }
-
           if (speaking) {
             if (silenceTimerRef.current) {
               clearTimeout(silenceTimerRef.current);
@@ -250,7 +212,6 @@ export default function CallPage() {
             }
             if (!prevSpeakingRef.current) {
               prevSpeakingRef.current = true;
-              addLog(`[VAD] → SPEAKING (avg: ${avg.toFixed(1)}, muted: ${muteRef.current}, agent playing: ${agentPlayingRef.current})`);
               if (agentPlayingRef.current) {
                 stopAgentAudio();
               } else {
@@ -258,11 +219,9 @@ export default function CallPage() {
               }
             }
           } else if (prevSpeakingRef.current && !silenceTimerRef.current) {
-            addLog(`[VAD] below threshold (avg: ${avg.toFixed(1)}) — silence debounce started (${VAD_SILENCE_DEBOUNCE_MS}ms)`);
             silenceTimerRef.current = setTimeout(() => {
               silenceTimerRef.current = null;
               prevSpeakingRef.current = false;
-              addLog(`[VAD] → SILENT (debounce elapsed, agent playing: ${agentPlayingRef.current})`);
               if (!agentPlayingRef.current) setSpeaker("silent");
             }, VAD_SILENCE_DEBOUNCE_MS);
           }
@@ -278,15 +237,12 @@ export default function CallPage() {
           const msg = JSON.parse(e.data) as Record<string, unknown>;
           if (msg.type === "metadata" && typeof msg.session_id === "string") {
             setSessionId(msg.session_id);
-            addLog(`[WS] session ID: ${msg.session_id}`);
-          } else {
-            addLog(`[WS] server msg: ${JSON.stringify(msg)}`);
+            addLog(`Session ID: ${msg.session_id}`);
           }
         } catch {
-          addLog(`[WS] raw text: ${e.data}`);
+          addLog(`Server message: ${e.data}`);
         }
       } else if (e.data instanceof ArrayBuffer) {
-        addLog(`[WS] PCM chunk received — ${(e.data.byteLength / 1024).toFixed(1)} KB`);
         playPcmChunk(e.data);
       }
     };
@@ -385,7 +341,6 @@ export default function CallPage() {
                     if (muteGainRef.current) {
                       muteGainRef.current.gain.value = muteRef.current ? 0 : 1;
                     }
-                    addLog(`[MIC] ${muteRef.current ? "MUTED" : "UNMUTED"} — gain node set to ${muteRef.current ? "0" : "1"}`);
                   }}
                   aria-label={muted ? "Unmute" : "Mute"}
                   className={`w-14 h-14 rounded-full flex items-center justify-center shadow-md transition-all active:scale-95 ${
