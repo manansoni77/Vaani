@@ -51,6 +51,12 @@ class CallSession:
     audio_mixed_url: str | None = field(default=None, init=False)
     _pending_transcript_parts: list[str] = field(default_factory=list, init=False)
     _pending_lang: str | None            = field(default=None,         init=False)
+    _process_task: asyncio.Task | None   = field(default=None,         init=False)
+    _interrupted_text: str | None        = field(default=None,         init=False)
+    _interrupted_lang: str | None        = field(default=None,         init=False)
+    _tts_stop: bool                      = field(default=False,        init=False)
+    _processing_text: str | None         = field(default=None,         init=False)
+    _processing_lang: str | None         = field(default=None,         init=False)
     human_takeover: bool                 = field(default=False,        init=False)
     claimed_by: str | None               = field(default=None,         init=False)
     human_agent_ws: WebSocket | None     = field(default=None,         init=False)
@@ -163,7 +169,6 @@ class CallSession:
         lang = getattr(data, "language_code", None) or "en-IN"
         if not text:
             return
-        #log testing 2 
         self.stt_log.info(f"raw data fields: {data.__dict__}")
         self.stt_log.info(f"transcript chunk: {text}  lang={lang}")
         self.transcript_parts.append(text)
@@ -179,8 +184,6 @@ class CallSession:
             buf.append(word)
             if word and word[-1] in ".?!":
                 sentence = " ".join(buf)
-                #translate before queing to TTS 
-
                 translated = await self._translate_to_lang(sentence, lang)
                 self.tts_log.debug(f"queuing sentence: {sentence!r}")
                 await self.tts_queue.put((translated, lang))
@@ -251,6 +254,8 @@ class CallSession:
                     f"  chunks={len(chunks)}  bytes={total_bytes}"
                 )
                 for chunk in chunks:
+                    if self._tts_stop:
+                        return
                     await self.websocket.send_bytes(chunk)
                 if chunks:
                     self.tts_events.append((start_time_s, b"".join(chunks)))
@@ -299,6 +304,8 @@ class CallSession:
         start_time_s: float | None = None
         audio_parts: list[bytes] = []
         async for msg in tts_ws:
+            if self._tts_stop:
+                break
             if isinstance(msg, AudioOutput):
                 chunk = base64.b64decode(msg.data.audio)
                 if start_time_s is None:
@@ -353,17 +360,62 @@ class CallSession:
             # self.call_log.debug(f"VAD: speaking={self._speaking}")
             if was_speaking != self._speaking:
                 self._emit_status("session_updated")
+            if not was_speaking and self._speaking:
+                self._interrupt_if_processing()
             if was_speaking and not self._speaking:
-                asyncio.create_task(self._flush_pending_transcript())
+                self._process_task = asyncio.create_task(self._flush_pending_transcript())
+
+    def _interrupt_if_processing(self) -> None:
+        """Cancel in-flight LLM/TTS processing when user starts speaking again."""
+        if self._process_task is None or self._process_task.done():
+            return
+        self._interrupted_text = self._processing_text
+        self._interrupted_lang = self._processing_lang
+        self._process_task.cancel()
+        self._tts_stop = True
+        self._drain_tts_queue()
+        if self._ai_speaking:
+            self._ai_speaking = False
+            self._emit_status("session_updated")
+        self.call_log.info(f"processing interrupted — saved text: {self._interrupted_text!r}")
+
+    def _drain_tts_queue(self) -> None:
+        drained = 0
+        while not self.tts_queue.empty():
+            try:
+                self.tts_queue.get_nowait()
+                self.tts_queue.task_done()
+                drained += 1
+            except asyncio.QueueEmpty:
+                break
+        if drained:
+            self.call_log.info(f"drained {drained} queued TTS sentences")
 
     async def _flush_pending_transcript(self) -> None:
         if not self._pending_transcript_parts:
-            return
-        full_text = " ".join(self._pending_transcript_parts)
-        raw_lang = self._pending_lang  # here we have lang which is the pending language identified from the user input.
-        lang = raw_lang or "en-IN"
-        self._pending_transcript_parts = []
-        self._pending_lang = None
+            if not self._interrupted_text:
+                return
+            # interrupted but no new transcript yet — reprocess the saved text as-is
+            full_text = self._interrupted_text
+            lang = self._interrupted_lang or "en-IN"
+            self._interrupted_text = None
+            self._interrupted_lang = None
+        else:
+            full_text = " ".join(self._pending_transcript_parts)
+            lang = self._pending_lang or "en-IN"
+            self._pending_transcript_parts = []
+            self._pending_lang = None
+
+            if self._interrupted_text:
+                full_text = self._interrupted_text + " " + full_text
+                lang = self._interrupted_lang or lang
+                self._interrupted_text = None
+                self._interrupted_lang = None
+                self.call_log.info(f"combined with interrupted text: {full_text!r}")
+
+        # Allow TTS to run again for this new processing cycle
+        self._tts_stop = False
+
         self.stt_log.info(f"speech ended — processing: {full_text!r}")
         user_turn = {"role": "user", "text": full_text}
         self.conversation_turns.append(user_turn)
@@ -380,15 +432,31 @@ class CallSession:
             self.call_log.info(f"language updated (not locked yet): {lang!r}")
         else:
             self.call_log.info(f"language already locked as {self.dialogue_flow.semantic_memory.user_language!r} — ignoring {lang!r}")
+
         if self.human_takeover:
             self._emit_status("session_updated")
             return
 
-        await self._queue_tts_sentences(full_text, lang)
-        user_turn["sentiment"] = self.dialogue_flow.semantic_memory.sentiment.value
-        self._emit_status("session_updated")
-        if self.dialogue_flow.phase == PHASE.COMPLETE:
-            asyncio.create_task(self._end_call())
+        saved_state = self.dialogue_flow.save_state()
+        self._processing_text = full_text
+        self._processing_lang = lang
+
+        try:
+            await self._queue_tts_sentences(full_text, lang)
+            user_turn["sentiment"] = self.dialogue_flow.semantic_memory.sentiment.value
+            self._emit_status("session_updated")
+            if self.dialogue_flow.phase == PHASE.COMPLETE:
+                asyncio.create_task(self._end_call())
+        except asyncio.CancelledError:
+            self.call_log.info("processing cancelled — user spoke again; rolling back state")
+            self.dialogue_flow.restore_state(saved_state)
+            for i, turn in enumerate(self.conversation_turns):
+                if turn is user_turn:
+                    del self.conversation_turns[i]
+                    break
+        finally:
+            self._processing_text = None
+            self._processing_lang = None
 
     async def _end_call(self) -> None:
         self.call_log.info("dialogue complete — waiting for TTS to drain before ending call")
