@@ -7,7 +7,7 @@ from pydantic import BaseModel
 from sqlalchemy.orm import Session
 
 import session_registry
-from constants import LOG_ENTITIES
+from constants import LOG_ENTITIES, QUERY_TYPE
 from human_session import HumanAgentSession
 from logger import CallSessionRecord, get_engine, get_logger
 from session_broadcaster import SessionBroadcaster
@@ -35,26 +35,43 @@ class CallSessionOut(BaseModel):
     key_details: str | None = None
     agent_confidence: str | None = None
     user_confidence: str | None = None
+    query_type: str | None = None
 
     model_config = {"from_attributes": True}
 
 
 @router.get("/history", response_model=list[CallSessionOut])
 def list_completed_sessions(
-    start_date: datetime | None = Query(default=None, description="Filter sessions started on or after this time (ISO 8601)"),
-    end_date:   datetime | None = Query(default=None, description="Filter sessions started on or before this time (ISO 8601)"),
-    limit:      int             = Query(default=20, ge=1, le=1000),
-    offset:     int             = Query(default=0,  ge=0),
-    order:      Literal["newest", "oldest"] = Query(default="newest"),
+    start_date: datetime | None = Query(
+        default=None,
+        description="Filter sessions started on or after this time (ISO 8601)",
+    ),
+    end_date: datetime | None = Query(
+        default=None,
+        description="Filter sessions started on or before this time (ISO 8601)",
+    ),
+    query_type: QUERY_TYPE | None = Query(
+        default=None,
+        description="Filter by query type: EMERGENCY, MUNICIPALITY, or GENERAL",
+    ),
+    limit: int = Query(default=20, ge=1, le=1000),
+    offset: int = Query(default=0, ge=0),
+    order: Literal["newest", "oldest"] = Query(default="newest"),
 ) -> list[CallSessionOut]:
-    """List completed call sessions, ordered by start time, with optional date range filter."""
+    """List completed call sessions, ordered by start time, with optional date range and query type filters."""
     with Session(get_engine()) as db:
         q = db.query(CallSessionRecord)
         if start_date:
             q = q.filter(CallSessionRecord.started_at >= start_date.isoformat())
         if end_date:
             q = q.filter(CallSessionRecord.started_at <= end_date.isoformat())
-        sort_col = CallSessionRecord.id.desc() if order == "newest" else CallSessionRecord.id.asc()
+        if query_type:
+            q = q.filter(CallSessionRecord.query_type == query_type.value)
+        sort_col = (
+            CallSessionRecord.id.desc()
+            if order == "newest"
+            else CallSessionRecord.id.asc()
+        )
         rows = q.order_by(sort_col).offset(offset).limit(limit).all()
         return [CallSessionOut.model_validate(row) for row in rows]
 
@@ -97,7 +114,9 @@ async def takeover_session(session_id: str, body: TakeoverRequest) -> dict:
     if session is None:
         raise HTTPException(status_code=404, detail="session not found or not active")
     if session.human_takeover:
-        raise HTTPException(status_code=409, detail=f"session already claimed by {session.claimed_by!r}")
+        raise HTTPException(
+            status_code=409, detail=f"session already claimed by {session.claimed_by!r}"
+        )
     session.human_takeover = True
     session.claimed_by = body.agent_id
     _log.info(f"session {session_id!r} claimed by agent {body.agent_id!r}")

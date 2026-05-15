@@ -65,6 +65,10 @@ def build_status(
     human_speaking: bool = False,
     human_takeover: bool = False,
     claimed_by: str | None = None,
+    query_type: str | None = None,
+    service_type: str | None = None,
+    location: str | None = None,
+    since_when: str | None = None,
 ) -> dict:
     return {
         "event_type": event_type,
@@ -86,5 +90,9 @@ def build_status(
         "user_confidence": user_confidence,
         "human_takeover": human_takeover,
         "claimed_by": claimed_by,
+        "query_type": query_type,
+        "service_type": service_type,
+        "location": location,
+        "since_when": since_when,
         "timestamp": datetime.now(timezone.utc).isoformat(timespec="milliseconds"),
     }

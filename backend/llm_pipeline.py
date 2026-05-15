@@ -1,6 +1,6 @@
 from typing import cast
 from llm import LLMClient
-from constants import CONFIDENCE_LEVEL, PHASE, CaptureAndValidationResponse, DecisionResponse, SemanticMemory, LOG_ENTITIES
+from constants import CONFIDENCE_LEVEL, PHASE, QUERY_TYPE, CaptureAndValidationResponse, DecisionResponse, SemanticMemory, LOG_ENTITIES
 from prompts import PROMPTS
 from logger import get_logger
 
@@ -17,6 +17,23 @@ class DialogueFlow:
         self.agent_confidence: CONFIDENCE_LEVEL | None = None
         self.user_confidence: CONFIDENCE_LEVEL | None = None
         self.log = get_logger(LOG_ENTITIES.DIALOGUE_FLOW, session_id=session_id)
+        self.llm_log = get_logger(LOG_ENTITIES.OPENAI_LLM, session_id=session_id)
+
+    def save_state(self) -> dict:
+        return {
+            "phase": self.phase,
+            "turns": self.turns,
+            "semantic_memory": SemanticMemory(**self.semantic_memory.model_dump()),
+            "agent_confidence": self.agent_confidence,
+            "user_confidence": self.user_confidence,
+        }
+
+    def restore_state(self, state: dict) -> None:
+        self.phase = state["phase"]
+        self.turns = state["turns"]
+        self.semantic_memory = state["semantic_memory"]
+        self.agent_confidence = state["agent_confidence"]
+        self.user_confidence = state["user_confidence"]
 
     async def get_response(self, input_text):
         prompt_fn = PROMPTS[self.phase]
@@ -36,6 +53,7 @@ class DialogueFlow:
                 system_prompt=prompt[0],
                 user_prompt=prompt[1],
                 response_format=CaptureAndValidationResponse,
+                log=self.llm_log,
             ))
 
             self.turns += 1
@@ -48,11 +66,17 @@ class DialogueFlow:
                 sentiment=response.sentiment,
                 urgency_level=response.urgency_level,
                 human_requested=response.human_requested,
-                user_language=self.semantic_memory.user_language,   # Forgot to carry forward now its preserved fr!!  
+                user_language=self.semantic_memory.user_language,  # preserved, not overwritten by LLM
+                query_type=response.query_type,
+                service_type=response.service_type,
+                location=response.location,
+                since_when=response.since_when,
             )
             self.agent_confidence = response.agent_confidence
             #log 1 
             self.log.info(f"semantic_memory rebuilt — lang before={prev_lang!r} lang after={self.semantic_memory.user_language!r}")
+            if self.semantic_memory.query_type == QUERY_TYPE.EMERGENCY:
+                self.max_turns = min(self.max_turns, 2)  # one-way ratchet — never resets back up
             if self.turns >= self.max_turns or response.follow_up == False:
                 if response.agent_confidence in [CONFIDENCE_LEVEL.GREEN, CONFIDENCE_LEVEL.YELLOW]:
                     yield response.response
@@ -71,8 +95,9 @@ class DialogueFlow:
                 system_prompt=prompt[0],
                 user_prompt=prompt[1],
                 response_format=CaptureAndValidationResponse,
+                log=self.llm_log,
             ))
-             
+
             self.agent_confidence = response.agent_confidence
 
             #Adding a follow up loop in Validation phase 
@@ -92,6 +117,7 @@ class DialogueFlow:
                 system_prompt=prompt[0],
                 user_prompt=prompt[1],
                 response_format=DecisionResponse,
+                log=self.llm_log,
             ))
 
             self.phase = PHASE.COMPLETE
