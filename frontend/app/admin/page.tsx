@@ -34,6 +34,10 @@ interface Session {
   key_details?: string;
   agent_confidence?: "GREEN" | "YELLOW" | "RED";
   user_confidence?: "GREEN" | "YELLOW" | "RED";
+  query_type?: "EMERGENCY" | "MUNICIPALITY" | "GENERAL" | null;
+  service_type?: "police" | "medical" | "fire" | "disaster_relief" | null;
+  location?: string | null;
+  since_when?: string | null;
   // Live-only
   caller_speaking?: boolean;
   ai_speaking?: boolean;
@@ -92,6 +96,7 @@ export default function AdminPage() {
   const [startDate, setStartDate] = useState("");
   const [endDate, setEndDate] = useState("");
   const [order, setOrder] = useState<"newest" | "oldest">("newest");
+  const [historyQueryType, setHistoryQueryType] = useState("");
   const historyOffsetRef = useRef(0);
   const hasFetchedRef = useRef(false);
 
@@ -151,22 +156,25 @@ export default function AdminPage() {
 
   // --- History fetching ---
   const buildHistoryQuery = useCallback(
-    (offset: number) => {
+    (offset: number, queryTypeOverride?: string) => {
       const p = new URLSearchParams();
       if (startDate) p.set("start_date", new Date(startDate).toISOString());
       if (endDate) p.set("end_date", new Date(endDate).toISOString());
       p.set("order", order);
       p.set("limit", String(PAGE_SIZE));
       p.set("offset", String(offset));
+      const qt = queryTypeOverride !== undefined ? queryTypeOverride : historyQueryType;
+      if (qt) p.set("query_type", qt);
       return p.toString();
     },
-    [startDate, endDate, order],
+    [startDate, endDate, order, historyQueryType],
   );
 
-  const fetchHistory = useCallback(async () => {
+  const fetchHistory = useCallback(async (queryTypeOverride?: string) => {
+    setHistoryLoading(true);
     try {
       const res = await fetch(
-        `${API_BASE}/sessions/history?${buildHistoryQuery(0)}`,
+        `${API_BASE}/sessions/history?${buildHistoryQuery(0, queryTypeOverride)}`,
       );
       if (!res.ok) throw new Error();
       const data: Session[] = await res.json();
@@ -323,7 +331,35 @@ export default function AdminPage() {
             ) : (
               <div className="flex flex-col">
                 {/* History filter bar */}
-                <div className="sticky top-0 z-10 flex flex-wrap items-center gap-2 px-4 py-2.5 bg-white/95 dark:bg-slate-900/95 backdrop-blur-sm border-b border-slate-200 dark:border-slate-700">
+                <div className="sticky top-0 z-10 flex flex-col gap-2 px-4 py-2.5 bg-white/95 dark:bg-slate-900/95 backdrop-blur-sm border-b border-slate-200 dark:border-slate-700">
+                  {/* Query type sub-tabs */}
+                  <div className="flex items-center gap-1">
+                    {(
+                      [
+                        { value: "", label: "All", active: "bg-slate-700 text-white", inactive: "bg-slate-100 dark:bg-slate-800 text-slate-600 dark:text-slate-300 hover:bg-slate-200 dark:hover:bg-slate-700" },
+                        { value: "EMERGENCY", label: "Emergency", active: "bg-red-600 text-white", inactive: "bg-red-50 dark:bg-red-900/30 text-red-700 dark:text-red-300 hover:bg-red-100 dark:hover:bg-red-900/50" },
+                        { value: "MUNICIPALITY", label: "Municipality", active: "bg-amber-500 text-white", inactive: "bg-amber-50 dark:bg-amber-900/30 text-amber-700 dark:text-amber-300 hover:bg-amber-100 dark:hover:bg-amber-900/50" },
+                        { value: "GENERAL", label: "General", active: "bg-blue-600 text-white", inactive: "bg-blue-50 dark:bg-blue-900/30 text-blue-700 dark:text-blue-300 hover:bg-blue-100 dark:hover:bg-blue-900/50" },
+                      ] as const
+                    ).map(({ value, label, active, inactive }) => (
+                      <button
+                        key={value}
+                        disabled={historyLoading}
+                        onClick={() => {
+                          if (historyQueryType === value) return;
+                          setHistoryQueryType(value);
+                          setHistory([]);
+                          historyOffsetRef.current = 0;
+                          fetchHistory(value);
+                        }}
+                        className={`px-3 py-1 text-xs font-semibold rounded-lg transition-colors disabled:opacity-50 disabled:cursor-not-allowed ${historyQueryType === value ? active : inactive}`}
+                      >
+                        {label}
+                      </button>
+                    ))}
+                  </div>
+                  {/* Date / order filters */}
+                  <div className="flex flex-wrap items-center gap-2">
                   <input
                     type="datetime-local"
                     value={startDate}
@@ -350,7 +386,7 @@ export default function AdminPage() {
                     <option value="oldest">Oldest first</option>
                   </select>
                   <button
-                    onClick={fetchHistory}
+                    onClick={() => fetchHistory()}
                     disabled={historyLoading}
                     className="px-4 py-1.5 bg-slate-700 hover:bg-slate-800 disabled:opacity-50 text-white text-sm font-semibold rounded-lg transition-colors"
                   >
@@ -380,6 +416,7 @@ export default function AdminPage() {
                       Loading...
                     </span>
                   )}
+                  </div>
                 </div>
 
                 {/* History cards */}
@@ -587,6 +624,8 @@ function SessionCard({
           </span>
         )}
       </div>
+
+      {session.query_type && <QueryTypeBadge session={session} compact />}
 
       {preview && (
         <p className="text-xs text-slate-500 dark:text-slate-400 italic line-clamp-2 leading-relaxed">
@@ -872,6 +911,15 @@ function DetailPanel({
       </div>
     </div>
   );
+
+  const querySection = session.query_type ? (
+    <div className="flex flex-col gap-1.5">
+      <span className="text-xs font-semibold text-slate-400 uppercase tracking-wide">
+        Query
+      </span>
+      <QueryTypeBadge session={session} />
+    </div>
+  ) : null;
 
   const timelineSection = (
     <div className="flex flex-col gap-2">
@@ -1164,6 +1212,7 @@ function DetailPanel({
           <div className="flex flex-col gap-4">
             {takeoverSection}
             {callerSignalsSection}
+            {querySection}
             {timelineSection}
             {intelligenceSection}
             {recordingSection}
@@ -1175,6 +1224,7 @@ function DetailPanel({
           {takeoverSection}
           {sessionIdSection}
           {statusSection}
+          {querySection}
           {callerSignalsSection}
           {timelineSection}
           {transcriptSection}
@@ -1262,6 +1312,66 @@ function ConfidenceBadge({ label, level }: { label: string; level: "GREEN" | "YE
     <span className={`text-xs px-2 py-0.5 rounded-full font-semibold ${styles[level]}`}>
       {label} confidence: {level}
     </span>
+  );
+}
+
+function QueryTypeBadge({
+  session,
+  compact,
+}: {
+  session: Session;
+  compact?: boolean;
+}) {
+  const qtStyles: Record<string, { badge: string; label: string }> = {
+    EMERGENCY: {
+      badge: "bg-red-100 text-red-700 dark:bg-red-900/50 dark:text-red-300",
+      label: "Emergency",
+    },
+    MUNICIPALITY: {
+      badge: "bg-amber-100 text-amber-700 dark:bg-amber-900/50 dark:text-amber-300",
+      label: "Municipality",
+    },
+    GENERAL: {
+      badge: "bg-blue-100 text-blue-700 dark:bg-blue-900/50 dark:text-blue-300",
+      label: "General",
+    },
+  };
+
+  const stLabels: Record<string, string> = {
+    police: "Police",
+    medical: "Medical",
+    fire: "Fire",
+    disaster_relief: "Disaster Relief",
+  };
+
+  const qt = session.query_type;
+  if (!qt) return null;
+
+  const { badge, label } = qtStyles[qt] ?? { badge: "bg-slate-100 text-slate-600 dark:bg-slate-700 dark:text-slate-300", label: qt };
+
+  return (
+    <div className={`flex flex-col gap-1 ${compact ? "" : ""}`}>
+      <div className="flex flex-wrap items-center gap-1.5">
+        <span className={`text-xs px-2 py-0.5 rounded-full font-semibold ${badge}`}>
+          {label}
+        </span>
+        {qt === "EMERGENCY" && session.service_type && (
+          <span className="text-xs px-2 py-0.5 rounded-full font-semibold bg-red-50 text-red-600 dark:bg-red-900/30 dark:text-red-300 border border-red-200 dark:border-red-800">
+            {stLabels[session.service_type] ?? session.service_type}
+          </span>
+        )}
+      </div>
+      {session.location && (
+        <p className={`text-xs text-slate-500 dark:text-slate-400 ${compact ? "truncate" : ""}`}>
+          📍 {session.location}
+        </p>
+      )}
+      {qt === "MUNICIPALITY" && session.since_when && (
+        <p className="text-xs text-slate-500 dark:text-slate-400">
+          Since: {session.since_when}
+        </p>
+      )}
+    </div>
   );
 }
 

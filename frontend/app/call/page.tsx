@@ -42,6 +42,8 @@ export default function CallPage() {
   const agentPlayingRef = useRef(false);
   const silenceTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const nextPlayTimeRef = useRef(0);
+  const activeSourcesRef = useRef<Set<AudioBufferSourceNode>>(new Set());
+  const muteGainRef = useRef<GainNode | null>(null);
 
   const addLog = useCallback((msg: string) => {
     const time = new Date().toLocaleTimeString();
@@ -51,6 +53,8 @@ export default function CallPage() {
   const cleanup = useCallback(() => {
     processorRef.current?.disconnect();
     processorRef.current = null;
+    muteGainRef.current?.disconnect();
+    muteGainRef.current = null;
     streamRef.current?.getTracks().forEach((t) => t.stop());
     streamRef.current = null;
   }, []);
@@ -68,6 +72,15 @@ export default function CallPage() {
     setSpeaker("silent");
     addLog("Call ended.");
   }, [addLog, cleanup]);
+
+  const stopAgentAudio = useCallback(() => {
+    for (const src of activeSourcesRef.current) {
+      try { src.stop(); } catch {}
+    }
+    activeSourcesRef.current.clear();
+    nextPlayTimeRef.current = 0;
+    agentPlayingRef.current = false;
+  }, []);
 
   const playPcmChunk = useCallback((data: ArrayBuffer) => {
     try {
@@ -91,11 +104,14 @@ export default function CallPage() {
       source.start(startTime);
       nextPlayTimeRef.current = startTime + buffer.duration;
 
+      activeSourcesRef.current.add(source);
       if (!agentPlayingRef.current) {
         agentPlayingRef.current = true;
         setSpeaker("agent");
       }
+
       source.onended = () => {
+        activeSourcesRef.current.delete(source);
         if (nextPlayTimeRef.current <= ctx.currentTime + 0.05) {
           agentPlayingRef.current = false;
           setSpeaker(prevSpeakingRef.current ? "user" : "silent");
@@ -111,6 +127,7 @@ export default function CallPage() {
     prevSpeakingRef.current = false;
     agentPlayingRef.current = false;
     nextPlayTimeRef.current = 0;
+    activeSourcesRef.current.clear();
     if (silenceTimerRef.current) {
       clearTimeout(silenceTimerRef.current);
       silenceTimerRef.current = null;
@@ -157,9 +174,17 @@ export default function CallPage() {
 
         const micSource = ctx.createMediaStreamSource(stream);
 
+        // Mute gate: gain=0 when muted, gain=1 otherwise.
+        // Zeroes the signal before it reaches the analyser or worklet,
+        // so VAD, encoding, and WS send are all unaware of mute.
+        const muteGain = ctx.createGain();
+        muteGain.gain.value = muteRef.current ? 0 : 1;
+        muteGainRef.current = muteGain;
+        micSource.connect(muteGain);
+
         const analyser = ctx.createAnalyser();
         analyser.fftSize = 512;
-        micSource.connect(analyser);
+        muteGain.connect(analyser);
         const freqBins = new Uint8Array(analyser.frequencyBinCount);
 
         const worklet = new AudioWorkletNode(ctx, "audio-processor");
@@ -170,17 +195,10 @@ export default function CallPage() {
 
           const float32: Float32Array = e.data;
           const int16 = new Int16Array(float32.length);
-          if (!muteRef.current) {
-            for (let i = 0; i < float32.length; i++) {
-              int16[i] = Math.max(-32768, Math.min(32767, float32[i] * 32767));
-            }
+          for (let i = 0; i < float32.length; i++) {
+            int16[i] = Math.max(-32768, Math.min(32767, float32[i] * 32767));
           }
           ws.send(int16.buffer);
-
-          if (muteRef.current) {
-            ws.send(JSON.stringify({ type: "vad", speaking: false }));
-            return;
-          }
 
           analyser.getByteFrequencyData(freqBins);
           const avg = voiceBandAvg(freqBins, ctx.sampleRate, analyser.fftSize);
@@ -194,7 +212,11 @@ export default function CallPage() {
             }
             if (!prevSpeakingRef.current) {
               prevSpeakingRef.current = true;
-              if (!agentPlayingRef.current) setSpeaker("user");
+              if (agentPlayingRef.current) {
+                stopAgentAudio();
+              } else {
+                setSpeaker("user");
+              }
             }
           } else if (prevSpeakingRef.current && !silenceTimerRef.current) {
             silenceTimerRef.current = setTimeout(() => {
@@ -205,7 +227,7 @@ export default function CallPage() {
           }
         };
 
-        micSource.connect(worklet);
+        muteGain.connect(worklet);
       })();
     };
 
@@ -234,7 +256,7 @@ export default function CallPage() {
         setStatus("disconnected");
       }
     };
-  }, [addLog, cleanup, playPcmChunk]);
+  }, [addLog, cleanup, playPcmChunk, stopAgentAudio]);
 
   useEffect(() => {
     return () => {
@@ -316,6 +338,9 @@ export default function CallPage() {
                   onClick={() => {
                     muteRef.current = !muteRef.current;
                     setMuted(muteRef.current);
+                    if (muteGainRef.current) {
+                      muteGainRef.current.gain.value = muteRef.current ? 0 : 1;
+                    }
                   }}
                   aria-label={muted ? "Unmute" : "Mute"}
                   className={`w-14 h-14 rounded-full flex items-center justify-center shadow-md transition-all active:scale-95 ${

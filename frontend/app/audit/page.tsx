@@ -7,7 +7,7 @@ import { API_BASE, WS_BASE } from "@/lib/config";
 
 const PAGE_SIZE = 20;
 
-const ENTITIES = ["APP", "CALL", "SARVAM_STT", "SARVAM_TTS", "OPENAI_LLM"];
+const ENTITIES = ["APP", "CALL", "SARVAM_STT", "SARVAM_TTS", "OPENAI_LLM", "DIALOGUE_FLOW", "HUMAN_AGENT"];
 const LEVELS = ["DEBUG", "INFO", "WARNING", "ERROR", "CRITICAL"];
 
 interface LogEntry {
