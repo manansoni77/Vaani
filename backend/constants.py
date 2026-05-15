@@ -116,7 +116,9 @@ class SemanticMemory(BaseModel):
 class CaptureAndValidationResponse(SemanticMemory):
     response: str = Field(..., description="The agent's response to the user input for this turn, must not be empty.")    
     follow_up: bool
+    reiterate: bool  # only used in VALIDATION phase to indicate if the summary should be reiterated with corrections
     agent_confidence: CONFIDENCE_LEVEL
+    user_confidence: CONFIDENCE_LEVEL
 
 
 class DecisionResponse(BaseModel):

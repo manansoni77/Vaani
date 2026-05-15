@@ -14,6 +14,7 @@ class DialogueFlow:
         self.phase = PHASE.GREETING
         self.semantic_memory = SemanticMemory()
         self.turns = 0
+        self.first_validate = True  # Flag to track if we're on the first validation turn
         self.agent_confidence: CONFIDENCE_LEVEL | None = None
         self.user_confidence: CONFIDENCE_LEVEL | None = None
         self.log = get_logger(LOG_ENTITIES.DIALOGUE_FLOW, session_id=session_id)
@@ -92,8 +93,8 @@ class DialogueFlow:
             self.agent_confidence = response.agent_confidence
             #log 1 
             self.log.info(f"semantic_memory rebuilt — lang={locked_language!r} turns={self.turns}")
-            if self.semantic_memory.query_type == QUERY_TYPE.EMERGENCY:
-                self.max_turns = min(self.max_turns, 2)  # one-way ratchet — never resets back up
+            # if self.semantic_memory.query_type == QUERY_TYPE.EMERGENCY:
+            #     self.max_turns = min(self.max_turns, 2)  # one-way ratchet — never resets back up
             if self.turns >= self.max_turns or response.follow_up == False:
                 if response.agent_confidence in [CONFIDENCE_LEVEL.GREEN, CONFIDENCE_LEVEL.YELLOW]:
                     yield response.response
@@ -102,7 +103,15 @@ class DialogueFlow:
                     #Tranistioning to validation phase tried to handle that through Prompt 
                     self.log.info("phase transitioning to VALIDATION based on follow_up=false")
                 elif response.agent_confidence == CONFIDENCE_LEVEL.RED:
-                     yield "It seems I am not able to understand your query, let me connect you to a human agent for better assistance."
+                    respose = {
+                        "hi-IN": "मुझे aaaaaaa है, मैं आपकी समस्या को समझ नहीं पा रहा हूँ। कृपया मुझे एक पल दें, मैं आपको एक मानव एजेंट से जोड़ता हूँ।",
+                        "en-IN": "Apologies, I'm having trouble understanding your issue. Please hold on, I'm connecting you to a human agent for better assistance.",
+                        "kn-IN": "ಕ್ಷಮಿಸಿ, ನಿಮ್ಮ ಸಮಸ್ಯೆಯನ್ನು ನಾನು ಅರ್ಥಮಾಡಿಕೊಳ್ಳಲು ಕಷ್ಟಪಡುತ್ತಿದ್ದೇನೆ. ದಯವಿಟ್ಟು ಕಾಯಿರಿ, ನಾನು ನಿಮಗೆ ಉತ್ತಮ ಸಹಾಯಕ್ಕಾಗಿ ಮಾನವ ಏಜೆಂಟ್‌ಗೆ ಸಂಪರ್ಕಿಸುತ್ತಿದ್ದೇನೆ.",
+                    }
+                    if locked_language in respose:
+                        yield respose[locked_language]
+                    else:
+                        yield respose["en-IN"]  # default to english if language not in response mapping
             else:
                 yield response.response
         elif self.phase == PHASE.VALIDATION:
@@ -117,33 +126,79 @@ class DialogueFlow:
 
             self.agent_confidence = response.agent_confidence
 
-            #Adding a follow up loop in Validation phase 
-            if not response.follow_up:
-                self.phase = PHASE.DECISION
-                self.log.info("User confirmed - phase transitioning to DECISION")
+            print('------------------------------------')
+            print(response.model_dump())
+            print('------------------------------------')
+
+            # Adding a follow up loop in Validation phase 
+            if self.first_validate:
+                self.first_validate = False
+                yield response.response
             else:
-                # User denied or was unclear - stay in VALIDATION and ask again
-                self.log.info("User denied or unclear - staying in VALIDATION for follow-up")
-            yield response.response
+                if not response.reiterate:
+                    self.phase = PHASE.COMPLETE
+                    self.log.info("User confirmed - phase transitioning to COMPLETE")
+
+                    if response.user_confidence in [CONFIDENCE_LEVEL.GREEN, CONFIDENCE_LEVEL.YELLOW]:
+                        response = {
+                            "hi-IN": "धन्यवाद पुष्टि करने के लिए। आपकी क्वेरी नोट कर ली गई है, हम इसे देखेंगे।",
+                            "en-IN": "Thank you for confirming. Your query has been noted, we will look into it.",
+                            "kn-IN": "ದೃಢೀಕರಿಸಿದಕ್ಕಾಗಿ ಧನ್ಯವಾದಗಳು. ನಿಮ್ಮ ಪ್ರಶ್ನೆಯನ್ನು ಗಮನಿಸಲಾಗಿದೆ, ನಾವು ಅದನ್ನು ನೋಡುತ್ತೇವೆ.",
+                        }
+                        if self.semantic_memory.user_language in response:
+                            yield response[self.semantic_memory.user_language]
+                        else:
+                            yield response["en-IN"]  # default to english if language not in response mapping
+                    elif response.user_confidence == CONFIDENCE_LEVEL.RED:
+                        response = {
+                            "hi-IN": "मुझे bbbbbbbbb है, मैं आपकी समस्या को समझ नहीं पा रहा हूँ। कृपया मुझे एक पल दें, मैं आपको एक मानव एजेंट से जोड़ता हूँ।",
+                            "en-IN": "Apologies, I'm having trouble understanding your issue. Please hold on, I'm connecting you to a human agent for better assistance.",
+                            "kn-IN": "ಕ್ಷಮಿಸಿ, ನಿಮ್ಮ ಸಮಸ್ಯೆಯನ್ನು ನಾನು ಅರ್ಥಮಾಡಿಕೊಳ್ಳಲು ಕಷ್ಟಪಡುತ್ತಿದ್ದೇನೆ. ದಯವಿಟ್ಟು ಕಾಯಿರಿ, ನಾನು ನಿಮಗೆ ಉತ್ತಮ ಸಹಾಯಕ್ಕಾಗಿ ಮಾನವ ಏಜೆಂಟ್‌ಗೆ ಸಂಪರ್ಕಿಸುತ್ತಿದ್ದೇನೆ.",
+                        }
+                        if self.semantic_memory.user_language in response:
+                            yield response[self.semantic_memory.user_language]
+                        else:
+                            yield response["en-IN"]  # default to english if language not in response mapping
+                else:
+                    # User denied or was unclear - stay in VALIDATION and ask again
+                    self.log.info("User denied or unclear - staying in VALIDATION for follow-up")
+                    yield response.response
 
 
-        elif self.phase == PHASE.DECISION:
-            self.log.info(f"phase=DECISION input={input_text!r} lang={self.semantic_memory.user_language!r}")
-            prompt = prompt_fn(input_text, self.semantic_memory) # Added semantic memory to the decision prompt to preserve the user language 
-            response = cast(DecisionResponse, await llm_client.get_json_response(
-                system_prompt=prompt[0],
-                user_prompt=prompt[1],
-                response_format=DecisionResponse,
-                log=self.llm_log,
-            ))
 
-            self.phase = PHASE.COMPLETE
-            self.user_confidence = response.user_confidence
-            self.log.info(f"phase=COMPLETE user_confidence={response.user_confidence}")
+        # elif self.phase == PHASE.DECISION:
+        #     self.log.info(f"phase=DECISION input={input_text!r} lang={self.semantic_memory.user_language!r}")
+        #     prompt = prompt_fn(input_text, self.semantic_memory) # Added semantic memory to the decision prompt to preserve the user language 
+        #     response = cast(DecisionResponse, await llm_client.get_json_response(
+        #         system_prompt=prompt[0],
+        #         user_prompt=prompt[1],
+        #         response_format=DecisionResponse,
+        #         log=self.llm_log,
+        #     ))
 
-            if response.user_confidence in [CONFIDENCE_LEVEL.GREEN, CONFIDENCE_LEVEL.YELLOW]:
-                yield "Thankyou for confirming. Your query has been noted, we will look into it."
-            elif response.user_confidence == CONFIDENCE_LEVEL.RED:
-                yield "Apologies, let me connect you to a human agent for assistance."
-        else:
-            raise ValueError(f"Unhandled phase: {self.phase}")
+        #     self.phase = PHASE.COMPLETE
+        #     self.user_confidence = response.user_confidence
+        #     self.log.info(f"phase=COMPLETE user_confidence={response.user_confidence}")
+
+        #     if response.user_confidence in [CONFIDENCE_LEVEL.GREEN, CONFIDENCE_LEVEL.YELLOW]:
+        #         response = {
+        #             "hi-IN": "धन्यवाद पुष्टि करने के लिए। आपकी क्वेरी नोट कर ली गई है, हम इसे देखेंगे।",
+        #             "en-IN": "Thank you for confirming. Your query has been noted, we will look into it.",
+        #             "kn-IN": "ದೃಢೀಕರಿಸಿದಕ್ಕಾಗಿ ಧನ್ಯವಾದಗಳು. ನಿಮ್ಮ ಪ್ರಶ್ನೆಯನ್ನು ಗಮನಿಸಲಾಗಿದೆ, ನಾವು ಅದನ್ನು ನೋಡುತ್ತೇವೆ.",
+        #         }
+        #         if self.semantic_memory.user_language in response:
+        #             yield response[self.semantic_memory.user_language]
+        #         else:
+        #             yield response["en-IN"]  # default to english if language not in response mapping
+        #     elif response.user_confidence == CONFIDENCE_LEVEL.RED:
+        #         response = {
+        #             "hi-IN": "मुझे bbbbbbbbb है, मैं आपकी समस्या को समझ नहीं पा रहा हूँ। कृपया मुझे एक पल दें, मैं आपको एक मानव एजेंट से जोड़ता हूँ।",
+        #             "en-IN": "Apologies, I'm having trouble understanding your issue. Please hold on, I'm connecting you to a human agent for better assistance.",
+        #             "kn-IN": "ಕ್ಷಮಿಸಿ, ನಿಮ್ಮ ಸಮಸ್ಯೆಯನ್ನು ನಾನು ಅರ್ಥಮಾಡಿಕೊಳ್ಳಲು ಕಷ್ಟಪಡುತ್ತಿದ್ದೇನೆ. ದಯವಿಟ್ಟು ಕಾಯಿರಿ, ನಾನು ನಿಮಗೆ ಉತ್ತಮ ಸಹಾಯಕ್ಕಾಗಿ ಮಾನವ ಏಜೆಂಟ್‌ಗೆ ಸಂಪರ್ಕಿಸುತ್ತಿದ್ದೇನೆ.",
+        #         }
+        #         if self.semantic_memory.user_language in response:
+        #             yield response[self.semantic_memory.user_language]
+        #         else:
+        #             yield response["en-IN"]  # default to english if language not in response mapping
+        # else:
+        #     raise ValueError(f"Unhandled phase: {self.phase}")

@@ -105,17 +105,16 @@ SUMMARY GUIDELINES by query type:
 RULES:
 - Summarize using the captured context. Do not introduce new information.
 - End with a simple yes/no question.
-- If user says YES or confirms → set follow_up=false.
-- If user says NO, is unclear, or wants to correct something → set follow_up=true and re-summarize with corrections.
 - Keep the response short, clear, and conversational.
-- Do not ask new follow-up questions in this phase.""",
+- Do not ask new follow-up questions in this phase.
+- If user says YES or confirms → set reiterate=false.
+- If user says NO, is unclear, or wants to correct something → set reiterate=true and re-summarize with user corrections.""",
         f"Captured summary: {semantic_memory.summary}\n"
-        f"Intent: {semantic_memory.intent}\n"
+        f"Identified Intent: {semantic_memory.intent}\n\n"
         f"Query type: {semantic_memory.query_type}\n"
         f"Service type: {semantic_memory.service_type}\n"
         f"Location: {semantic_memory.location}\n"
         f"Since when: {semantic_memory.since_when}\n\n"
-        f"Identified Intent: {semantic_memory.intent}\n\n"
         f"User: {input_text}",
     )
 
