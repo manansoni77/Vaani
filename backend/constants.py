@@ -1,6 +1,6 @@
 from enum import Enum
 from typing import List
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 
 
 class PRERECORDED_AUDIO(Enum):
@@ -114,7 +114,7 @@ class SemanticMemory(BaseModel):
 
 
 class CaptureAndValidationResponse(SemanticMemory):
-    response: str
+    response: str = Field(..., description="The agent's response to the user input for this turn, must not be empty.")    
     follow_up: bool
     agent_confidence: CONFIDENCE_LEVEL
 

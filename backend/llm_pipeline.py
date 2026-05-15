@@ -34,20 +34,33 @@ class DialogueFlow:
         self.semantic_memory = state["semantic_memory"]
         self.agent_confidence = state["agent_confidence"]
         self.user_confidence = state["user_confidence"]
-
+    
+    async def stream_greeting(self):
+        """
+        Called by session.py on session start — no user input needed.
+        Yields the same fixed greeting for every caller (zero LLM cost).
+        Transitions phase GREETING → CAPTURE so the first user message
+        lands directly in CAPTURE with no extra routing.
+        """
+        self.log.info("phase=GREETING generating greeting")
+        self.phase = PHASE.CAPTURE                   
+        # transition immediately so we don't have to route the first user message specially     
+        yield "Hello! Thank you for calling Vaani. How can I assist you today?"
+   
     async def get_response(self, input_text):
         prompt_fn = PROMPTS[self.phase]
 
         if self.phase == PHASE.GREETING:
-            self.log.info("phase=GREETING generating greeting")
-            self.phase = PHASE.CAPTURE
-            yield "Hello! Thank you for calling Vaani. How can I assist you today?"
+            #Safety fallback 
+            self.log.info("get_response called in GREETING phase — use stream_greeting(); falling back")
             # prompt = prompt_fn()
             # response = llm_client.stream_completion(system_prompt=prompt[0], user_prompt=prompt[1])
-            # async for chunk in response:
-            #     yield chunk
+            async for chunk in self.stream_greeting():
+                 yield chunk
+            return 
+        
         elif self.phase == PHASE.CAPTURE:
-            self.log.info(f"phase=CAPTURE turn={self.turns + 1} input={input_text!r}")
+            self.log.info(f"phase=CAPTURE turn={self.turns + 1} input={input_text!r} lang={self.semantic_memory.user_language!r}    ")
             prompt = prompt_fn(input_text, self.semantic_memory)
             response = cast(CaptureAndValidationResponse, await llm_client.get_json_response(
                 system_prompt=prompt[0],
@@ -57,7 +70,11 @@ class DialogueFlow:
             ))
 
             self.turns += 1
-            prev_lang = self.semantic_memory.user_language
+            self.agent_confidence = response.agent_confidence
+            # Preserve language through the rebuild — language is locked by session.py
+            # before this runs, and must survive SemanticMemory reconstruction every turn.
+
+            locked_language = self.semantic_memory.user_language
             self.semantic_memory = SemanticMemory(
                 summary=response.summary,
                 intent=response.intent,
@@ -66,7 +83,7 @@ class DialogueFlow:
                 sentiment=response.sentiment,
                 urgency_level=response.urgency_level,
                 human_requested=response.human_requested,
-                user_language=self.semantic_memory.user_language,  # preserved, not overwritten by LLM
+                user_language=locked_language,  # preserved, not overwritten by LLM
                 query_type=response.query_type,
                 service_type=response.service_type,
                 location=response.location,
@@ -74,7 +91,7 @@ class DialogueFlow:
             )
             self.agent_confidence = response.agent_confidence
             #log 1 
-            self.log.info(f"semantic_memory rebuilt — lang before={prev_lang!r} lang after={self.semantic_memory.user_language!r}")
+            self.log.info(f"semantic_memory rebuilt — lang={locked_language!r} turns={self.turns}")
             if self.semantic_memory.query_type == QUERY_TYPE.EMERGENCY:
                 self.max_turns = min(self.max_turns, 2)  # one-way ratchet — never resets back up
             if self.turns >= self.max_turns or response.follow_up == False:

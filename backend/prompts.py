@@ -115,6 +115,7 @@ RULES:
         f"Service type: {semantic_memory.service_type}\n"
         f"Location: {semantic_memory.location}\n"
         f"Since when: {semantic_memory.since_when}\n\n"
+        f"Identified Intent: {semantic_memory.intent}\n\n"
         f"User: {input_text}",
     )
 
@@ -122,7 +123,7 @@ RULES:
 def decision_prompt(input_text: str, semantic_memory: SemanticMemory) -> PromptTuple:
     return (
         f"""You are a helpful assistant named Vaani. The user is speaking in {semantic_memory.user_language}. You MUST reply ONLY in {semantic_memory.user_language}. Do NOT mix languages. Always respond in the same language as the user. Based on the user's response of yes or no, if yes, acknowledge their task and reassure them that you will handle it. If no, tell them they will be connected to a human agent shortly.""",
-        f"User: {input_text}",
+        f"Conversation so far: {semantic_memory.summary}\n\nUser: {input_text}",
     )
 
 

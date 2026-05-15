@@ -189,36 +189,34 @@ class CallSession:
             buf.append(word)
             if word and word[-1] in ".?!":
                 sentence = " ".join(buf)
-                translated = await self._translate_to_lang(sentence, lang)
                 self.tts_log.debug(f"queuing sentence: {sentence!r}")
-                await self.tts_queue.put((translated, lang))
-                agent_parts.append(translated)
+                await self.tts_queue.put((sentence, lang))
+                agent_parts.append(sentence)
                 buf = []
         if buf:
             sentence = " ".join(buf)
-            translated = await self._translate_to_lang(sentence, lang)
             self.tts_log.debug(f"queuing final fragment: {sentence!r}")
-            await self.tts_queue.put((translated, lang))
-            agent_parts.append(translated)
+            await self.tts_queue.put((sentence, lang))
+            agent_parts.append(sentence)
 
         if agent_parts:
             self.conversation_turns.append({"role": "agent", "text": " ".join(agent_parts)})
 
-    async def _translate_to_lang(self, text: str, target_lang: str) -> str:
-        if target_lang == "en-IN":
-            return text  # no translation needed
-        try:
-            sarvam = AsyncSarvamAI(api_subscription_key=SARVAM_API_KEY)
-            result = await sarvam.text.translate(
-                input=text,
-                source_language_code="en-IN",
-                target_language_code=target_lang,
-            )
-            self.call_log.info(f"translated to {target_lang!r}: {text!r} → {result.translated_text!r}")
-            return result.translated_text
-        except Exception as e:
-            self.call_log.error(f"translation failed: {e!r} — using original")
-            return text  # fallback to original on error
+    #async def _translate_to_lang(self, text: str, target_lang: str) -> str:
+       # if target_lang == "en-IN":
+           # return text  # no translation needed
+        #try:
+           # sarvam = AsyncSarvamAI(api_subscription_key=SARVAM_API_KEY)
+           # result = await sarvam.text.translate(
+              #  input=text,
+               # source_language_code="en-IN",
+                #target_language_code=target_lang, # type: ignore
+         #   )
+           # self.call_log.info(f"translated to {target_lang!r}: {text!r} → {result.translated_text!r}")
+           # return result.translated_text
+        #except Exception as e:
+            #self.call_log.error(f"translation failed: {e!r} — using original")
+            #return text  # fallback to original on error
 
     # ------------------------------------------------------------------ TTS
 
@@ -435,14 +433,14 @@ class CallSession:
 
         # lock only after first substantive CAPTURE turn completes
         # dialogue_flow.turns increments after turn 1 is processed
-        if not self._lang_locked and self.dialogue_flow.turns >= 1:
+        if not self._lang_locked:
             self.dialogue_flow.semantic_memory.user_language = lang
             self._lang_locked = True
             self.call_log.info(f"language locked for session after first capture turn: {lang!r}")
-        elif not self._lang_locked:
+        #elif not self._lang_locked:
             # still in greeting/first turn — update but don't lock yet
-            self.dialogue_flow.semantic_memory.user_language = lang
-            self.call_log.info(f"language updated (not locked yet): {lang!r}")
+           # self.dialogue_flow.semantic_memory.user_language = lang
+           # self.call_log.info(f"language updated (not locked yet): {lang!r}")
         else:
             self.call_log.info(f"language already locked as {self.dialogue_flow.semantic_memory.user_language!r} — ignoring {lang!r}")
 
@@ -463,6 +461,11 @@ class CallSession:
         except asyncio.CancelledError:
             self.call_log.info("processing cancelled — user spoke again; rolling back state")
             self.dialogue_flow.restore_state(saved_state)
+            # Roll back language lock if this was the first turn
+            if saved_state["semantic_memory"].user_language != lang:
+                self._lang_locked = False
+                self.call_log.info("language lock rolled back due to cancellation on first turn")
+
             for i, turn in enumerate(self.conversation_turns):
                 if turn is user_turn:
                     del self.conversation_turns[i]
@@ -556,9 +559,25 @@ class CallSession:
     # ------------------------------------------------------------------ entry point
 
     async def _send_greeting(self) -> None:
+        """
+        Streams the fixed greeting via dialogue_flow.stream_greeting().
+        Fires automatically on session start — no user input needed.
+        stream_greeting() transitions GREETING → CAPTURE internally so the
+        first user message lands directly in CAPTURE.
+        """
         self.call_log.info("sending greeting")
-        await self._queue_tts_sentences("", "en-IN")
-
+        agent_parts: list[str] = []
+ 
+        async for chunk in self.dialogue_flow.stream_greeting():
+            if not chunk:
+                continue
+            await self.tts_queue.put((chunk, "en-IN"))
+            agent_parts.append(chunk)
+ 
+        if agent_parts:
+            self.conversation_turns.append({"role": "agent", "text": " ".join(agent_parts)})
+        self.call_log.info("greeting queued for TTS")
+ 
     async def run(self) -> None:
         asyncio.create_task(self._send_greeting())
         self.stt_handle = asyncio.create_task(self.stt_task())
@@ -567,3 +586,4 @@ class CallSession:
             await self.receive_loop()
         finally:
             await self.shutdown()
+ 
