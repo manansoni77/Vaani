@@ -49,6 +49,30 @@ class DialogueFlow:
         yield "Hello! Thank you for calling Vaani. How can I assist you today?"
    
     async def get_response(self, input_text):
+        if self.phase == PHASE.COMPLETE:
+            self.log.info("get_response called in COMPLETE phase — ignoring")
+
+            if self.user_confidence in [CONFIDENCE_LEVEL.GREEN, CONFIDENCE_LEVEL.YELLOW]:
+                response = {
+                    "hi-IN": "धन्यवाद पुष्टि करने के लिए। आपकी क्वेरी नोट कर ली गई है, हम इसे देखेंगे।",
+                    "en-IN": "Thank you for confirming. Your query has been noted, we will look into it.",
+                    "kn-IN": "ದೃಢೀಕರಿಸಿದಕ್ಕಾಗಿ ಧನ್ಯವಾದಗಳು. ನಿಮ್ಮ ಪ್ರಶ್ನೆಯನ್ನು ಗಮನಿಸಲಾಗಿದೆ, ನಾವು ಅದನ್ನು ನೋಡುತ್ತೇವೆ.",
+                }
+                if self.semantic_memory.user_language in response:
+                    yield response[self.semantic_memory.user_language]
+                else:
+                    yield response["en-IN"]  # default to english if language not in response mapping
+            elif self.user_confidence == CONFIDENCE_LEVEL.RED:
+                response = {
+                    "hi-IN": "मुझे bbbbbbbbb है, मैं आपकी समस्या को समझ नहीं पा रहा हूँ। कृपया मुझे एक पल दें, मैं आपको एक मानव एजेंट से जोड़ता हूँ।",
+                    "en-IN": "Apologies, I'm having trouble understanding your issue. Please hold on, I'm connecting you to a human agent for better assistance.",
+                    "kn-IN": "ಕ್ಷಮಿಸಿ, ನಿಮ್ಮ ಸಮಸ್ಯೆಯನ್ನು ನಾನು ಅರ್ಥಮಾಡಿಕೊಳ್ಳಲು ಕಷ್ಟಪಡುತ್ತಿದ್ದೇನೆ. ದಯವಿಟ್ಟು ಕಾಯಿರಿ, ನಾನು ನಿಮಗೆ ಉತ್ತಮ ಸಹಾಯಕ್ಕಾಗಿ ಮಾನವ ಏಜೆಂಟ್‌ಗೆ ಸಂಪರ್ಕಿಸುತ್ತಿದ್ದೇನೆ.",
+                }
+                if self.semantic_memory.user_language in response:
+                    yield response[self.semantic_memory.user_language]
+                else:
+                    yield response["en-IN"]  # default to english if language not in response mapping
+
         prompt_fn = PROMPTS[self.phase]
 
         if self.phase == PHASE.GREETING:
@@ -125,6 +149,7 @@ class DialogueFlow:
             ))
 
             self.agent_confidence = response.agent_confidence
+            self.user_confidence = response.user_confidence
 
             print('------------------------------------')
             print(response.model_dump())

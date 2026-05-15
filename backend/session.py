@@ -448,6 +448,10 @@ class CallSession:
             self._emit_status("session_updated")
             return
 
+        if self.dialogue_flow.phase == PHASE.COMPLETE:
+            self.call_log.info("transcript received after call complete — ignoring")
+            return
+
         saved_state = self.dialogue_flow.save_state()
         self._processing_text = full_text
         self._processing_lang = lang
