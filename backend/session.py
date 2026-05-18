@@ -51,6 +51,13 @@ class CallSession:
     audio_mixed_url: str | None = field(default=None, init=False)
     _pending_transcript_parts: list[str] = field(default_factory=list, init=False)
     _pending_lang: str | None            = field(default=None,         init=False)
+    _process_task: asyncio.Task | None   = field(default=None,         init=False)
+    _interrupted_text: str | None        = field(default=None,         init=False)
+    _interrupted_lang: str | None        = field(default=None,         init=False)
+    _tts_stop: bool                      = field(default=False,        init=False)
+    _processing_text: str | None         = field(default=None,         init=False)
+    _processing_lang: str | None         = field(default=None,         init=False)
+    _current_speech_start: float | None  = field(default=None,         init=False)
     human_takeover: bool                 = field(default=False,        init=False)
     claimed_by: str | None               = field(default=None,         init=False)
     human_agent_ws: WebSocket | None     = field(default=None,         init=False)
@@ -99,6 +106,10 @@ class CallSession:
             user_confidence=df.user_confidence.value if df.user_confidence else None,
             human_takeover=self.human_takeover,
             claimed_by=self.claimed_by,
+            query_type=mem.query_type.value if mem.query_type else None,
+            service_type=mem.service_type.value if mem.service_type else None,
+            location=mem.location,
+            since_when=mem.since_when,
         )
         SessionBroadcaster.get().publish(status)
         if event_type == "session_ended":
@@ -163,7 +174,6 @@ class CallSession:
         lang = getattr(data, "language_code", None) or "en-IN"
         if not text:
             return
-        #log testing 2 
         self.stt_log.info(f"raw data fields: {data.__dict__}")
         self.stt_log.info(f"transcript chunk: {text}  lang={lang}")
         self.transcript_parts.append(text)
@@ -179,38 +189,34 @@ class CallSession:
             buf.append(word)
             if word and word[-1] in ".?!":
                 sentence = " ".join(buf)
-                #translate before queing to TTS 
-
-                translated = await self._translate_to_lang(sentence, lang)
                 self.tts_log.debug(f"queuing sentence: {sentence!r}")
-                await self.tts_queue.put((translated, lang))
-                agent_parts.append(translated)
+                await self.tts_queue.put((sentence, lang))
+                agent_parts.append(sentence)
                 buf = []
         if buf:
             sentence = " ".join(buf)
-            translated = await self._translate_to_lang(sentence, lang)
             self.tts_log.debug(f"queuing final fragment: {sentence!r}")
-            await self.tts_queue.put((translated, lang))
-            agent_parts.append(translated)
+            await self.tts_queue.put((sentence, lang))
+            agent_parts.append(sentence)
 
         if agent_parts:
             self.conversation_turns.append({"role": "agent", "text": " ".join(agent_parts)})
 
-    async def _translate_to_lang(self, text: str, target_lang: str) -> str:
-        if target_lang == "en-IN":
-            return text  # no translation needed
-        try:
-            sarvam = AsyncSarvamAI(api_subscription_key=SARVAM_API_KEY)
-            result = await sarvam.text.translate(
-                input=text,
-                source_language_code="en-IN",
-                target_language_code=target_lang,
-            )
-            self.call_log.info(f"translated to {target_lang!r}: {text!r} → {result.translated_text!r}")
-            return result.translated_text
-        except Exception as e:
-            self.call_log.error(f"translation failed: {e!r} — using original")
-            return text  # fallback to original on error
+    #async def _translate_to_lang(self, text: str, target_lang: str) -> str:
+       # if target_lang == "en-IN":
+           # return text  # no translation needed
+        #try:
+           # sarvam = AsyncSarvamAI(api_subscription_key=SARVAM_API_KEY)
+           # result = await sarvam.text.translate(
+              #  input=text,
+               # source_language_code="en-IN",
+                #target_language_code=target_lang, # type: ignore
+         #   )
+           # self.call_log.info(f"translated to {target_lang!r}: {text!r} → {result.translated_text!r}")
+           # return result.translated_text
+        #except Exception as e:
+            #self.call_log.error(f"translation failed: {e!r} — using original")
+            #return text  # fallback to original on error
 
     # ------------------------------------------------------------------ TTS
 
@@ -251,9 +257,10 @@ class CallSession:
                     f"  chunks={len(chunks)}  bytes={total_bytes}"
                 )
                 for chunk in chunks:
+                    if self._tts_stop:
+                        break
                     await self.websocket.send_bytes(chunk)
-                if chunks:
-                    self.tts_events.append((start_time_s, b"".join(chunks)))
+                self.tts_events.append((start_time_s, b"".join(chunks)))
                 self.tts_log.info(f"[CACHE] done streaming {phrase.slug!r}")
                 return
             else:
@@ -280,7 +287,7 @@ class CallSession:
 
             if audio_parts and start_time_s is not None:
                 self.tts_events.append((start_time_s, b"".join(audio_parts)))
-                if phrase is not None:
+                if phrase is not None and not self._tts_stop:
                     save_cached_audio(phrase, lang, b"".join(audio_parts), PCM_SAMPLE_RATE)
                     self.tts_log.info(f"[CACHE] saved {phrase.slug!r}  lang={lang}")
         except Exception as e:
@@ -299,6 +306,8 @@ class CallSession:
         start_time_s: float | None = None
         audio_parts: list[bytes] = []
         async for msg in tts_ws:
+            if self._tts_stop:
+                break
             if isinstance(msg, AudioOutput):
                 chunk = base64.b64decode(msg.data.audio)
                 if start_time_s is None:
@@ -353,42 +362,121 @@ class CallSession:
             # self.call_log.debug(f"VAD: speaking={self._speaking}")
             if was_speaking != self._speaking:
                 self._emit_status("session_updated")
+            if not was_speaking and self._speaking:
+                self._current_speech_start = self.loop.time() - self.session_start
+                self._interrupt_if_processing()
             if was_speaking and not self._speaking:
-                asyncio.create_task(self._flush_pending_transcript())
+                self._process_task = asyncio.create_task(self._flush_pending_transcript())
+
+    def _interrupt_if_processing(self) -> None:
+        """Cancel in-flight LLM/TTS processing when user starts speaking again."""
+        if self._process_task and not self._process_task.done():
+            # LLM still running — cancel and save text for combining on next flush
+            self._interrupted_text = self._processing_text
+            self._interrupted_lang = self._processing_lang
+            self._process_task.cancel()
+            self._tts_stop = True
+            self._drain_tts_queue()
+            if self._ai_speaking:
+                self._ai_speaking = False
+                self._emit_status("session_updated")
+            self.call_log.info(f"processing interrupted — saved text: {self._interrupted_text!r}")
+        elif self._ai_speaking:
+            # LLM done, agent turn complete — stop TTS and process user reply as a fresh turn
+            self._tts_stop = True
+            self._drain_tts_queue()
+            self._ai_speaking = False
+            self._emit_status("session_updated")
+            self.call_log.info("TTS interrupted by user — stopping playback")
+
+    def _drain_tts_queue(self) -> None:
+        drained = 0
+        while not self.tts_queue.empty():
+            try:
+                self.tts_queue.get_nowait()
+                self.tts_queue.task_done()
+                drained += 1
+            except asyncio.QueueEmpty:
+                break
+        if drained:
+            self.call_log.info(f"drained {drained} queued TTS sentences")
+
 
     async def _flush_pending_transcript(self) -> None:
         if not self._pending_transcript_parts:
-            return
-        full_text = " ".join(self._pending_transcript_parts)
-        raw_lang = self._pending_lang  # here we have lang which is the pending language identified from the user input.
-        lang = raw_lang or "en-IN"
-        self._pending_transcript_parts = []
-        self._pending_lang = None
+            if not self._interrupted_text:
+                return
+            # interrupted but no new transcript yet — reprocess the saved text as-is
+            full_text = self._interrupted_text
+            lang = self._interrupted_lang or "en-IN"
+            self._interrupted_text = None
+            self._interrupted_lang = None
+        else:
+            full_text = " ".join(self._pending_transcript_parts)
+            lang = self._pending_lang or "en-IN"
+            self._pending_transcript_parts = []
+            self._pending_lang = None
+
+            if self._interrupted_text:
+                full_text = self._interrupted_text + " " + full_text
+                lang = self._interrupted_lang or lang
+                self._interrupted_text = None
+                self._interrupted_lang = None
+                self.call_log.info(f"combined with interrupted text: {full_text!r}")
+
+        # Allow TTS to run again for this new processing cycle
+        self._tts_stop = False
+
         self.stt_log.info(f"speech ended — processing: {full_text!r}")
-        user_turn = {"role": "user", "text": full_text}
+        user_turn = {"role": "user", "text": full_text, "start_time_s": self._current_speech_start}
         self.conversation_turns.append(user_turn)
 
         # lock only after first substantive CAPTURE turn completes
         # dialogue_flow.turns increments after turn 1 is processed
-        if not self._lang_locked and self.dialogue_flow.turns >= 1:
+        if not self._lang_locked:
             self.dialogue_flow.semantic_memory.user_language = lang
             self._lang_locked = True
             self.call_log.info(f"language locked for session after first capture turn: {lang!r}")
-        elif not self._lang_locked:
+        #elif not self._lang_locked:
             # still in greeting/first turn — update but don't lock yet
-            self.dialogue_flow.semantic_memory.user_language = lang
-            self.call_log.info(f"language updated (not locked yet): {lang!r}")
+           # self.dialogue_flow.semantic_memory.user_language = lang
+           # self.call_log.info(f"language updated (not locked yet): {lang!r}")
         else:
             self.call_log.info(f"language already locked as {self.dialogue_flow.semantic_memory.user_language!r} — ignoring {lang!r}")
+
         if self.human_takeover:
             self._emit_status("session_updated")
             return
 
-        await self._queue_tts_sentences(full_text, lang)
-        user_turn["sentiment"] = self.dialogue_flow.semantic_memory.sentiment.value
-        self._emit_status("session_updated")
         if self.dialogue_flow.phase == PHASE.COMPLETE:
-            asyncio.create_task(self._end_call())
+            self.call_log.info("transcript received after call complete — ignoring")
+            return
+
+        saved_state = self.dialogue_flow.save_state()
+        self._processing_text = full_text
+        self._processing_lang = lang
+
+        try:
+            await self._queue_tts_sentences(full_text, lang)
+            user_turn["sentiment"] = self.dialogue_flow.semantic_memory.sentiment.value
+            self._emit_status("session_updated")
+            if self.dialogue_flow.phase == PHASE.COMPLETE:
+                asyncio.create_task(self._end_call())
+        except asyncio.CancelledError:
+            self.call_log.info("processing cancelled — user spoke again; rolling back state")
+            self.dialogue_flow.restore_state(saved_state)
+            # Roll back language lock if this was the first turn
+            if saved_state["semantic_memory"].user_language != lang:
+                self._lang_locked = False
+                self.call_log.info("language lock rolled back due to cancellation on first turn")
+
+            for i, turn in enumerate(self.conversation_turns):
+                if turn is user_turn:
+                    del self.conversation_turns[i]
+                    break
+        finally:
+            self._processing_text = None
+            self._processing_lang = None
 
     async def _end_call(self) -> None:
         self.call_log.info("dialogue complete — waiting for TTS to drain before ending call")
@@ -458,7 +546,11 @@ class CallSession:
                 self.call_log.warning("R2 not configured — raw audio discarded")
 
             if self.tts_events:
-                mixed = mix_wav_bytes(raw, self.tts_events)
+                user_speech_times = [
+                    t["start_time_s"] for t in self.conversation_turns
+                    if t.get("role") == "user" and t.get("start_time_s") is not None
+                ]
+                mixed = mix_wav_bytes(raw, self.tts_events, user_speech_times=user_speech_times)
                 if mixed:
                     mixed_url = await upload_to_r2(mixed, f"audio/call_{self.session_id}_{timestamp}_mixed.wav")
                     if mixed_url:
@@ -471,9 +563,25 @@ class CallSession:
     # ------------------------------------------------------------------ entry point
 
     async def _send_greeting(self) -> None:
+        """
+        Streams the fixed greeting via dialogue_flow.stream_greeting().
+        Fires automatically on session start — no user input needed.
+        stream_greeting() transitions GREETING → CAPTURE internally so the
+        first user message lands directly in CAPTURE.
+        """
         self.call_log.info("sending greeting")
-        await self._queue_tts_sentences("", "en-IN")
-
+        agent_parts: list[str] = []
+ 
+        async for chunk in self.dialogue_flow.stream_greeting():
+            if not chunk:
+                continue
+            await self.tts_queue.put((chunk, "en-IN"))
+            agent_parts.append(chunk)
+ 
+        if agent_parts:
+            self.conversation_turns.append({"role": "agent", "text": " ".join(agent_parts)})
+        self.call_log.info("greeting queued for TTS")
+ 
     async def run(self) -> None:
         asyncio.create_task(self._send_greeting())
         self.stt_handle = asyncio.create_task(self.stt_task())
@@ -482,3 +590,4 @@ class CallSession:
             await self.receive_loop()
         finally:
             await self.shutdown()
+ 
