@@ -8,9 +8,13 @@ dependencies = [
     "boto3>=1.43.3",
     "fastapi[standard-no-fastapi-cloud-cli]>=0.136.1",
     "gunicorn>=26.0.0",
+    "grpcio-tools>=1.76.0",
+    "grpclib>=0.4.7",
     "openai>=2.33.0",
+    "protobuf>=5.28.0",
     "psycopg2-binary>=2.9.12",
     "sarvamai>=0.1.28",
+    "sonora==0.2.3",
     "sqlalchemy>=2.0.49",
     "uvicorn>=0.46.0",
 ]

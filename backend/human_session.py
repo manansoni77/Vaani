@@ -2,6 +2,7 @@ import asyncio
 import base64
 import json
 import os
+from typing import Any
 
 from fastapi import WebSocket, WebSocketDisconnect
 from sarvamai import AsyncSarvamAI
@@ -20,7 +21,7 @@ class HumanAgentSession:
     caller, and runs STT to produce "human:" transcript turns.
     """
 
-    def __init__(self, call_session, agent_websocket: WebSocket) -> None:
+    def __init__(self, call_session, agent_websocket: Any) -> None:
         self.call_session = call_session
         self.websocket = agent_websocket
         self._audio_queue: asyncio.Queue = asyncio.Queue()

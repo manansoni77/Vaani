@@ -1,0 +1,72 @@
+syntax = "proto3";
+
+package vaani;
+
+// ── Shared leaf types ─────────────────────────────────────────────────────────
+
+// Raw PCM16LE audio at 16 kHz mono — identical to what WebSocket sends as binary.
+message AudioChunk {
+  bytes pcm_data = 1;
+}
+
+// Voice-activity detection signal from the browser.
+message VadSignal {
+  bool speaking = 1;
+}
+
+// Server sends this once immediately after handshake.
+message SessionMetadata {
+  string session_id = 1;
+}
+
+// Server signals end-of-call.
+message EndCall {}
+
+// ── Caller channel (equivalent to WS /call) ───────────────────────────────────
+
+// Client → Server
+message CallClientMessage {
+  oneof payload {
+    AudioChunk audio = 1;
+    VadSignal  vad   = 2;
+  }
+}
+
+// Server → Client
+message CallServerMessage {
+  oneof payload {
+    SessionMetadata metadata = 1;
+    AudioChunk      audio    = 2;
+    EndCall         end_call = 3;
+  }
+}
+
+// ── Human-agent channel (equivalent to WS /sessions/{id}/audio) ──────────────
+
+// Client → Server
+message AgentClientMessage {
+  oneof payload {
+    AudioChunk audio = 1;
+    VadSignal  vad   = 2;
+  }
+}
+
+// Server → Client (caller audio forwarded to the agent)
+message AgentServerMessage {
+  oneof payload {
+    AudioChunk audio = 1;
+  }
+}
+
+// ── Services ──────────────────────────────────────────────────────────────────
+
+service CallService {
+  // Bidirectional: caller sends audio+VAD, receives TTS audio back.
+  rpc StreamCall(stream CallClientMessage) returns (stream CallServerMessage);
+}
+
+service AgentService {
+  // Bidirectional: human agent sends audio+VAD, receives caller audio.
+  // Pass session-id and agent-id as gRPC request metadata headers.
+  rpc StreamAgentAudio(stream AgentClientMessage) returns (stream AgentServerMessage);
+}

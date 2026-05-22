@@ -4,6 +4,7 @@ import json
 import os
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
+from typing import Any
 
 from fastapi import WebSocket, WebSocketDisconnect
 from sarvamai import AsyncSarvamAI, AudioOutput, EventResponse
@@ -28,7 +29,7 @@ VAD_GATE_STT: bool = os.getenv("VAD_GATE_STT", "0") not in ("0", "false", "no")
 @dataclass
 class CallSession:
     session_id: str
-    websocket: WebSocket
+    websocket: Any  # WebSocket or GrpcCallAdapter
     loop: asyncio.AbstractEventLoop
     session_start: float
     # conversationState: ConversationState
@@ -60,7 +61,7 @@ class CallSession:
     _current_speech_start: float | None  = field(default=None,         init=False)
     human_takeover: bool                 = field(default=False,        init=False)
     claimed_by: str | None               = field(default=None,         init=False)
-    human_agent_ws: WebSocket | None     = field(default=None,         init=False)
+    human_agent_ws: Any | None           = field(default=None,         init=False)
     _lang_locked: bool = field(default=False, init=False)
 
     def __post_init__(self) -> None:

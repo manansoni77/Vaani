@@ -15,6 +15,7 @@ from constants import LOG_ENTITIES
 from session_registry import register_call, unregister_call
 from logger import get_logger, save_call_session, setup_logging
 from datasets_router import router as datasets_router
+from grpc_server import make_grpc_asgi_app
 from logs_router import router as logs_router
 from session import CallSession
 from sessions_router import router as sessions_router
@@ -46,6 +47,8 @@ app.add_middleware(
 app.include_router(logs_router)
 app.include_router(sessions_router)
 app.include_router(datasets_router)
+
+app.mount("/grpc", make_grpc_asgi_app())
 
 
 @app.websocket("/call")
