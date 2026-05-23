@@ -1,21 +1,19 @@
 import asyncio
-import base64
 import json
-import os
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 
 from fastapi import WebSocket, WebSocketDisconnect
-from sarvamai import AsyncSarvamAI, AudioOutput, EventResponse
 
 from audio import load_cached_audio, mix_wav_bytes, pcm_chunks, save_cached_audio, upload_to_r2, wav_bytes
-from config import PCM_SAMPLE_RATE
+from config import PCM_SAMPLE_RATE, VAD_GATE_STT
 from constants import LOG_ENTITIES, PHASE, PRERECORDED_AUDIO
 
 from ai_services.dialogue_flow import DialogueFlow
+from ai_services.stt_tts import get_caller_stt_client, get_tts_client
+from ai_services.stt_tts.base import BaseTTSClient
 from logging_module.logger import get_logger
 from sessions.session_broadcaster import SessionBroadcaster, build_status
-from config import SARVAM_API_KEY, SARVAM_SPEAKER_PROFILE, VAD_GATE_STT
 
 
 
@@ -117,62 +115,21 @@ class CallSession:
 
     async def stt_task(self) -> None:
         self.stt_log.info("task started")
-        if not SARVAM_API_KEY:
-            self.stt_log.warning("SARVAM_API_KEY not set — STT disabled")
+        client = get_caller_stt_client()
+        if client is None:
+            self.stt_log.warning("STT disabled — no provider configured")
             while (await self.audio_queue.get()) is not None:
                 pass
             return
-
-        sarvam = AsyncSarvamAI(api_subscription_key=SARVAM_API_KEY)
         try:
-            self.stt_log.info("connecting...")
-            async with sarvam.speech_to_text_translate_streaming.connect(
-                model="saaras:v3",
-                mode="translate",
-                sample_rate=str(PCM_SAMPLE_RATE),
-                input_audio_codec="pcm_s16le",
-                high_vad_sensitivity=True,
-                vad_signals=True,
-            ) as sarvam_ws:
-                self.stt_log.info("connected")
-                await self._run_stt_streams(sarvam_ws)
+            self.stt_log.info("starting STT stream")
+            await client.stream(self.audio_queue, self._on_stt_transcript)
         except BaseException as e:
             self.stt_log.error(f"error ({type(e).__name__}): {e!r}")
             while not self.audio_queue.empty():
                 self.audio_queue.get_nowait()
 
-    async def _run_stt_streams(self, sarvam_ws) -> None:
-        send = asyncio.create_task(self._send_audio(sarvam_ws))
-        recv = asyncio.create_task(self._receive_transcripts(sarvam_ws))
-        await send
-        recv.cancel()
-        try:
-            await recv
-        except asyncio.CancelledError:
-            pass
-
-    async def _send_audio(self, sarvam_ws) -> None:
-        while (chunk := await self.audio_queue.get()) is not None:
-            # self.stt_log.debug(f"sending audio chunk of {len(chunk)} bytes")
-            b64 = base64.b64encode(chunk).decode()
-            await sarvam_ws.translate(audio=b64)
-
-    async def _receive_transcripts(self, sarvam_ws) -> None:
-        async for message in sarvam_ws:
-            self.stt_log.debug(f"received message: {message}")
-            msg_type = getattr(message, "type", None)
-            data = getattr(message, "data", None)
-            if msg_type == "data" and data:
-                await self._handle_transcript_data(data)
-            elif msg_type == "events" and data:
-                self.stt_log.debug(f"event: {getattr(data, 'signal_type', data)}")
-
-    async def _handle_transcript_data(self, data) -> None:
-        text = getattr(data, "transcript", None)
-        lang = getattr(data, "language_code", None) or "en-IN"
-        if not text:
-            return
-        self.stt_log.info(f"raw data fields: {data.__dict__}")
+    async def _on_stt_transcript(self, text: str, lang: str) -> None:
         self.stt_log.info(f"transcript chunk: {text}  lang={lang}")
         self.transcript_parts.append(text)
         self._pending_transcript_parts.append(text)
@@ -205,13 +162,13 @@ class CallSession:
     # ------------------------------------------------------------------ TTS
 
     async def tts_task(self) -> None:
-        if not SARVAM_API_KEY:
-            self.tts_log.warning("SARVAM_API_KEY not set — TTS disabled")
+        client = get_tts_client()
+        if client is None:
+            self.tts_log.warning("TTS disabled — no provider configured")
             while (await self.tts_queue.get()) is not None:
                 pass
             return
 
-        sarvam = AsyncSarvamAI(api_subscription_key=SARVAM_API_KEY)
         while True:
             item = await self.tts_queue.get()
             if item is None:
@@ -221,14 +178,14 @@ class CallSession:
             if not self._ai_speaking:
                 self._ai_speaking = True
                 self._emit_status("session_updated")
-            await self._synthesise_sentence(sarvam, sentence, lang)
+            await self._synthesise_sentence(client, sentence, lang)
             self.tts_queue.task_done()
             if self.tts_queue.empty():
                 self._ai_speaking = False
                 self._emit_status("session_updated")
 
     async def _synthesise_sentence(
-        self, sarvam: AsyncSarvamAI, sentence: str, lang: str
+        self, tts_client: BaseTTSClient, sentence: str, lang: str
     ) -> None:
         phrase = PRERECORDED_AUDIO.from_text(sentence)
 
@@ -251,24 +208,26 @@ class CallSession:
                 return
             else:
                 self.tts_log.info(
-                    f"[CACHE] miss for {phrase.slug!r}  lang={lang} — falling back to Sarvam TTS"
+                    f"[CACHE] miss for {phrase.slug!r}  lang={lang} — falling back to TTS"
                 )
         else:
-            self.tts_log.info(f"[SARVAM] dynamic sentence: {sentence!r}  lang={lang}")
+            self.tts_log.info(f"[TTS] dynamic sentence: {sentence!r}  lang={lang}")
 
         try:
-            self.tts_log.info(f"[SARVAM] connecting for: {sentence!r}  lang={lang}")
-            async with sarvam.text_to_speech_streaming.connect(
-                model="bulbul:v3", send_completion_event=True
-            ) as tts_ws:
-                await self._configure_tts(tts_ws, lang)
-                await tts_ws.convert(sentence)
-                await tts_ws.flush()
-                audio_parts, start_time_s = await self._collect_tts_audio(tts_ws)
+            self.tts_log.info(f"[TTS] synthesizing: {sentence!r}  lang={lang}")
+            start_time_s: float | None = None
+            audio_parts: list[bytes] = []
+            async for chunk in tts_client.synthesize(sentence, lang):
+                if self._tts_stop:
+                    break
+                if start_time_s is None:
+                    start_time_s = self.loop.time() - self.session_start
+                audio_parts.append(chunk)
+                await self.websocket.send_bytes(chunk)
 
             total_bytes = sum(len(p) for p in audio_parts)
             self.tts_log.info(
-                f"[SARVAM] done: {sentence!r}  chunks={len(audio_parts)}  bytes={total_bytes}"
+                f"[TTS] done: {sentence!r}  chunks={len(audio_parts)}  bytes={total_bytes}"
             )
 
             if audio_parts and start_time_s is not None:
@@ -279,38 +238,7 @@ class CallSession:
                     )
                     self.tts_log.info(f"[CACHE] saved {phrase.slug!r}  lang={lang}")
         except Exception as e:
-            self.tts_log.error(f"[SARVAM] error on {sentence!r}: {e!r}")
-
-    async def _configure_tts(self, tts_ws, lang: str) -> None:
-        self.tts_log.debug(
-            f"configuration: lang={lang}, speaker={SARVAM_SPEAKER_PROFILE}, codec=linear16, rate=16000"
-        )
-        await tts_ws.configure(
-            target_language_code=lang,
-            speaker=SARVAM_SPEAKER_PROFILE,
-            output_audio_codec="linear16",
-            speech_sample_rate=16000,
-        )
-
-    async def _collect_tts_audio(self, tts_ws) -> tuple[list[bytes], float | None]:
-        start_time_s: float | None = None
-        audio_parts: list[bytes] = []
-        async for msg in tts_ws:
-            if self._tts_stop:
-                break
-            if isinstance(msg, AudioOutput):
-                chunk = base64.b64decode(msg.data.audio)
-                if start_time_s is None:
-                    start_time_s = self.loop.time() - self.session_start
-                audio_parts.append(chunk)
-                await self.websocket.send_bytes(chunk)
-                # self.tts_log.debug(f"audio chunk received: {len(chunk)} bytes  request_id={msg.data.request_id}")
-            elif isinstance(msg, EventResponse):
-                event_type = getattr(msg.data, "event_type", None)
-                self.tts_log.debug(f"event received: {event_type}")
-                if event_type == "final":
-                    break
-        return audio_parts, start_time_s
+            self.tts_log.error(f"[TTS] error on {sentence!r}: {e!r}")
 
     # ------------------------------------------------------------------ receive loop
 

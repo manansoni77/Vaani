@@ -25,6 +25,9 @@ DB_URL = os.getenv("DB_URL", "sqlite:///application.db")
 SARVAM_API_KEY = os.getenv("SARVAM_API_KEY")
 SARVAM_SPEAKER_PROFILE = os.getenv("SARVAM_SPEAKER_PROFILE", "ishita")
 
+STT_PROVIDER = os.getenv("STT_PROVIDER", "sarvam")
+TTS_PROVIDER = os.getenv("TTS_PROVIDER", "sarvam")
+
 # When True, audio is only forwarded to Sarvam STT while the frontend VAD reports speaking=true.
 # When False (default), all audio is forwarded and Sarvam's internal VAD handles filtering.
 VAD_GATE_STT: bool = os.getenv("VAD_GATE_STT", "0") not in ("0", "false", "no")
