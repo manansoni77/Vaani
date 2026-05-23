@@ -1,11 +1,8 @@
 import io
 import os
 import wave
-
+from config import PRERECORDED_DIR, PCM_CHUNK_SIZE
 from constants import PRERECORDED_AUDIO
-
-PRERECORDED_DIR = os.path.join(os.path.dirname(__file__), "prerecorded")
-_CHUNK_SIZE = 8192  # bytes per chunk when streaming cached PCM
 
 
 def _cache_path(phrase: PRERECORDED_AUDIO, lang: str) -> str:
@@ -40,4 +37,4 @@ def save_cached_audio(
 def pcm_chunks(wav_bytes: bytes) -> list[bytes]:
     with wave.open(io.BytesIO(wav_bytes)) as w:
         pcm = w.readframes(w.getnframes())
-    return [pcm[i : i + _CHUNK_SIZE] for i in range(0, len(pcm), _CHUNK_SIZE)]
+    return [pcm[i : i + PCM_CHUNK_SIZE] for i in range(0, len(pcm), PCM_CHUNK_SIZE)]

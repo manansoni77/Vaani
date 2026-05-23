@@ -5,12 +5,9 @@ import os
 
 from fastapi import WebSocket, WebSocketDisconnect
 from sarvamai import AsyncSarvamAI
-
-from audio_utils import PCM_SAMPLE_RATE
+from config import PCM_SAMPLE_RATE, SARVAM_API_KEY
 from constants import LOG_ENTITIES
-from logger import get_logger
-
-SARVAM_API_KEY = os.getenv("SARVAM_API_KEY")
+from logging_module.logger import get_logger
 
 
 class HumanAgentSession:
@@ -41,14 +38,20 @@ class HumanAgentSession:
             pass
 
     async def run(self) -> None:
-        self.log.info(f"human agent connected — claimed_by={self.call_session.claimed_by!r}")
+        self.log.info(
+            f"human agent connected — claimed_by={self.call_session.claimed_by!r}"
+        )
         self.call_session.human_agent_ws = self.websocket
-        self.log.info("registered as call_session.human_agent_ws — caller audio will be forwarded")
+        self.log.info(
+            "registered as call_session.human_agent_ws — caller audio will be forwarded"
+        )
         stt_handle = None
         if SARVAM_API_KEY:
             stt_handle = asyncio.create_task(self._stt_task())
         else:
-            self.log.warning("SARVAM_API_KEY not set — STT disabled, transcript will not be generated")
+            self.log.warning(
+                "SARVAM_API_KEY not set — STT disabled, transcript will not be generated"
+            )
         try:
             await self._receive_loop()
         finally:
@@ -108,7 +111,9 @@ class HumanAgentSession:
         full_text = " ".join(self._pending_parts)
         self._pending_parts.clear()
         self.log.info(f"human turn: {full_text!r}")
-        self.call_session.conversation_turns.append({"role": "human", "text": full_text})
+        self.call_session.conversation_turns.append(
+            {"role": "human", "text": full_text}
+        )
         self.call_session._emit_status("session_updated")
 
     async def _stt_task(self) -> None:

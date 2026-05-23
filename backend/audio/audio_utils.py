@@ -1,19 +1,17 @@
 import array
 import asyncio
 import io
-import os
 import wave
-
+from config import (
+    PCM_SAMPLE_RATE,
+    R2_ACCESS_KEY_ID,
+    R2_ACCOUNT_ID,
+    R2_BUCKET_NAME,
+    R2_PUBLIC_URL,
+    R2_SECRET_ACCESS_KEY,
+)
 import boto3
 from botocore.config import Config
-
-PCM_SAMPLE_RATE = 16000  # Hz — must match AudioContext sampleRate on frontend
-
-R2_ACCOUNT_ID        = os.getenv("R2_ACCOUNT_ID")
-R2_ACCESS_KEY_ID     = os.getenv("R2_ACCESS_KEY_ID")
-R2_SECRET_ACCESS_KEY = os.getenv("R2_SECRET_ACCESS_KEY")
-R2_BUCKET_NAME       = os.getenv("R2_BUCKET_NAME", "vaani")
-R2_PUBLIC_URL        = os.getenv("R2_PUBLIC_URL", "https://pub-0eafe6c1b8bf435d8cc1ea73caed3e2e.r2.dev")
 
 
 def _r2_client():

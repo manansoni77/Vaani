@@ -1,4 +1,5 @@
 from enum import Enum
+import logging
 from typing import List
 from pydantic import BaseModel, Field
 
@@ -47,7 +48,6 @@ class LOG_ENTITIES(str, Enum):
     OPENAI_LLM = "OPENAI_LLM"
     DIALOGUE_FLOW = "DIALOGUE_FLOW"
     HUMAN_AGENT = "HUMAN_AGENT"
-
 
 class PHASE(str, Enum):
     GREETING = "GREETING"
@@ -123,3 +123,4 @@ class CaptureAndValidationResponse(SemanticMemory):
 
 class DecisionResponse(BaseModel):
     user_confidence: CONFIDENCE_LEVEL
+

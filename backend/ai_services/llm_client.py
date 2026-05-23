@@ -1,6 +1,6 @@
 import os
 from openai import AsyncOpenAI
-from logger import get_logger
+from logging_module.logger import get_logger
 from constants import LOG_ENTITIES
 
 # Fallback logger used when no per-session logger is supplied by the caller.
@@ -11,7 +11,9 @@ class LLMClient:
     def __init__(self):
         self.client = AsyncOpenAI(api_key=os.getenv("OPENAI_KEY"))
 
-    async def stream_completion(self, user_prompt, system_prompt, temperature=0.3, log=None):
+    async def stream_completion(
+        self, user_prompt, system_prompt, temperature=0.3, log=None
+    ):
         log = log or _default_log
         log.info(
             f"stream_completion called"
@@ -38,7 +40,9 @@ class LLMClient:
 
         log.info(f"stream_completion finished  response={(''.join(chunks))!r}")
 
-    async def get_json_response(self, system_prompt, user_prompt, response_format=None, log=None):
+    async def get_json_response(
+        self, system_prompt, user_prompt, response_format=None, log=None
+    ):
         log = log or _default_log
         log.info(
             f"get_json_response called  format={response_format.__name__ if response_format else None}"

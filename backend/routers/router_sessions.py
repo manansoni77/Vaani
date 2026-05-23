@@ -6,11 +6,12 @@ from fastapi import APIRouter, HTTPException, Query, WebSocket, WebSocketDisconn
 from pydantic import BaseModel
 from sqlalchemy.orm import Session
 
-import session_registry
+from database.models import CallSessionRecord
+import sessions.session_registry as session_registry
 from constants import LOG_ENTITIES, QUERY_TYPE
-from human_session import HumanAgentSession
-from logger import CallSessionRecord, get_engine, get_logger
-from session_broadcaster import SessionBroadcaster
+from sessions.human_session import HumanAgentSession
+from logging_module.logger import get_engine, get_logger
+from sessions.session_broadcaster import SessionBroadcaster
 
 router = APIRouter(prefix="/sessions", tags=["sessions"])
 _log = get_logger(LOG_ENTITIES.APP)
