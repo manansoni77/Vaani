@@ -2,17 +2,22 @@
 
 import { useRef, useState, useCallback, useEffect } from "react";
 import Link from "next/link";
+import { WS_BASE, GRPC_BASE } from "@/lib/config";
+import { GrpcBidiStream } from "@/lib/grpc-bidi";
+import {
+  AudioChunk,
+  VadSignal,
+  CallClientMessage,
+  CallServerMessage,
+} from "@/lib/vaani-proto";
 
 type CallStatus = "idle" | "connecting" | "active" | "disconnected";
 type Speaker = "silent" | "user" | "agent";
+type Transport = "websocket" | "grpc";
 
-import { WS_BASE } from "@/lib/config";
-
-// Average magnitude of voice-band frequency bins (85–3000 Hz) below this is silence.
 const VAD_SILENCE_THRESHOLD = 100;
-// How long audio must stay below threshold before the state flips to silent.
 const VAD_SILENCE_DEBOUNCE_MS = 400;
-const TTS_SAMPLE_RATE = 16000; // bulbul:v3 PCM output rate
+const TTS_SAMPLE_RATE = 16000;
 
 function voiceBandAvg(bins: Uint8Array, sampleRate: number, fftSize: number): number {
   const binHz = sampleRate / fftSize;
@@ -29,11 +34,12 @@ export default function CallPage() {
   const [sessionId, setSessionId] = useState<string | null>(null);
   const [logs, setLogs] = useState<string[]>([]);
   const [speaker, setSpeaker] = useState<Speaker>("silent");
-
   const [muted, setMuted] = useState(false);
-  const muteRef = useRef(false);
+  const [transport, setTransport] = useState<Transport>("websocket");
 
+  const muteRef = useRef(false);
   const wsRef = useRef<WebSocket | null>(null);
+  const grpcStreamRef = useRef<GrpcBidiStream<CallClientMessage, CallServerMessage> | null>(null);
   const processorRef = useRef<AudioWorkletNode | null>(null);
   const streamRef = useRef<MediaStream | null>(null);
   const audioCtxRef = useRef<AudioContext | null>(null);
@@ -59,20 +65,6 @@ export default function CallPage() {
     streamRef.current = null;
   }, []);
 
-  const stopCall = useCallback(() => {
-    closingRef.current = true;
-    if (silenceTimerRef.current) {
-      clearTimeout(silenceTimerRef.current);
-      silenceTimerRef.current = null;
-    }
-    cleanup();
-    wsRef.current?.close();
-    wsRef.current = null;
-    setStatus("disconnected");
-    setSpeaker("silent");
-    addLog("Call ended.");
-  }, [addLog, cleanup]);
-
   const stopAgentAudio = useCallback(() => {
     for (const src of activeSourcesRef.current) {
       try { src.stop(); } catch {}
@@ -82,12 +74,28 @@ export default function CallPage() {
     agentPlayingRef.current = false;
   }, []);
 
-  const playPcmChunk = useCallback((data: ArrayBuffer) => {
+  const stopCall = useCallback(() => {
+    closingRef.current = true;
+    if (silenceTimerRef.current) {
+      clearTimeout(silenceTimerRef.current);
+      silenceTimerRef.current = null;
+    }
+    cleanup();
+    wsRef.current?.close();
+    wsRef.current = null;
+    grpcStreamRef.current?.cancel();
+    grpcStreamRef.current = null;
+    setStatus("disconnected");
+    setSpeaker("silent");
+    addLog("Call ended.");
+  }, [addLog, cleanup]);
+
+  const playPcmChunk = useCallback((data: Uint8Array) => {
     try {
       const ctx = audioCtxRef.current;
       if (!ctx || ctx.state === "closed") return;
 
-      const int16 = new Int16Array(data);
+      const int16 = new Int16Array(data.buffer, data.byteOffset, data.byteLength / 2);
       const float32 = new Float32Array(int16.length);
       for (let i = 0; i < int16.length; i++) {
         float32[i] = int16[i] / 32768;
@@ -122,6 +130,78 @@ export default function CallPage() {
     }
   }, [addLog]);
 
+  // Shared audio worklet setup — called by both transports after connection is ready.
+  const setupAudioWorklet = useCallback(async (
+    stream: MediaStream,
+    sendAudio: (pcm: Uint8Array) => void,
+    sendVad: (speaking: boolean) => void,
+  ) => {
+    const ctx = new AudioContext({ sampleRate: 16000 });
+    audioCtxRef.current = ctx;
+
+    try {
+      await ctx.audioWorklet.addModule("/audio-processor.worklet.js");
+    } catch {
+      addLog("Failed to load audio worklet.");
+      setStatus("disconnected");
+      return;
+    }
+
+    const micSource = ctx.createMediaStreamSource(stream);
+
+    const muteGain = ctx.createGain();
+    muteGain.gain.value = muteRef.current ? 0 : 1;
+    muteGainRef.current = muteGain;
+    micSource.connect(muteGain);
+
+    const analyser = ctx.createAnalyser();
+    analyser.fftSize = 512;
+    muteGain.connect(analyser);
+    const freqBins = new Uint8Array(analyser.frequencyBinCount);
+
+    const worklet = new AudioWorkletNode(ctx, "audio-processor");
+    processorRef.current = worklet;
+
+    worklet.port.onmessage = (e) => {
+      if (closingRef.current) return;
+
+      const float32: Float32Array = e.data;
+      const int16 = new Int16Array(float32.length);
+      for (let i = 0; i < float32.length; i++) {
+        int16[i] = Math.max(-32768, Math.min(32767, float32[i] * 32767));
+      }
+      sendAudio(new Uint8Array(int16.buffer));
+
+      analyser.getByteFrequencyData(freqBins);
+      const avg = voiceBandAvg(freqBins, ctx.sampleRate, analyser.fftSize);
+      const speaking = avg > VAD_SILENCE_THRESHOLD;
+      sendVad(speaking);
+
+      if (speaking) {
+        if (silenceTimerRef.current) {
+          clearTimeout(silenceTimerRef.current);
+          silenceTimerRef.current = null;
+        }
+        if (!prevSpeakingRef.current) {
+          prevSpeakingRef.current = true;
+          if (agentPlayingRef.current) {
+            stopAgentAudio();
+          } else {
+            setSpeaker("user");
+          }
+        }
+      } else if (prevSpeakingRef.current && !silenceTimerRef.current) {
+        silenceTimerRef.current = setTimeout(() => {
+          silenceTimerRef.current = null;
+          prevSpeakingRef.current = false;
+          if (!agentPlayingRef.current) setSpeaker("silent");
+        }, VAD_SILENCE_DEBOUNCE_MS);
+      }
+    };
+
+    muteGain.connect(worklet);
+  }, [addLog, stopAgentAudio]);
+
   const startCall = useCallback(async () => {
     closingRef.current = false;
     prevSpeakingRef.current = false;
@@ -140,10 +220,7 @@ export default function CallPage() {
 
     let stream: MediaStream;
     try {
-      stream = await navigator.mediaDevices.getUserMedia({
-        audio: true,
-        video: false,
-      });
+      stream = await navigator.mediaDevices.getUserMedia({ audio: true, video: false });
       streamRef.current = stream;
     } catch {
       addLog("Microphone access denied.");
@@ -151,112 +228,113 @@ export default function CallPage() {
       return;
     }
 
-    addLog("Connecting to server...");
-    const ws = new WebSocket(`${WS_BASE}/call`);
-    ws.binaryType = "arraybuffer";
-    wsRef.current = ws;
+    if (transport === "websocket") {
+      addLog("Connecting via WebSocket...");
+      const ws = new WebSocket(`${WS_BASE}/call`);
+      ws.binaryType = "arraybuffer";
+      wsRef.current = ws;
 
-    ws.onopen = () => {
-      void (async () => {
-        setStatus("active");
-        addLog("Connected.");
+      ws.onopen = () => {
+        void (async () => {
+          setStatus("active");
+          addLog("Connected.");
+          await setupAudioWorklet(
+            stream,
+            (pcm) => { if (ws.readyState === WebSocket.OPEN) ws.send(pcm.buffer as ArrayBuffer); },
+            (speaking) => { if (ws.readyState === WebSocket.OPEN) ws.send(JSON.stringify({ type: "vad", speaking })); },
+          );
+        })();
+      };
 
-        const ctx = new AudioContext({ sampleRate: 16000 });
-        audioCtxRef.current = ctx;
+      ws.onmessage = (e) => {
+        if (typeof e.data === "string") {
+          try {
+            const msg = JSON.parse(e.data) as Record<string, unknown>;
+            if (msg.type === "metadata" && typeof msg.session_id === "string") {
+              setSessionId(msg.session_id);
+              addLog(`Session ID: ${msg.session_id}`);
+            }
+          } catch {
+            addLog(`Server message: ${e.data}`);
+          }
+        } else if (e.data instanceof ArrayBuffer) {
+          playPcmChunk(new Uint8Array(e.data));
+        }
+      };
 
-        try {
-          await ctx.audioWorklet.addModule("/audio-processor.worklet.js");
-        } catch {
-          addLog("Failed to load audio worklet.");
+      ws.onerror = () => addLog("WebSocket error.");
+      ws.onclose = () => {
+        cleanup();
+        if (!closingRef.current) {
+          addLog("Disconnected from server.");
           setStatus("disconnected");
-          return;
         }
+      };
 
-        const micSource = ctx.createMediaStreamSource(stream);
+    } else {
+      // gRPC-Web path
+      addLog("Connecting via gRPC-Web...");
 
-        // Mute gate: gain=0 when muted, gain=1 otherwise.
-        // Zeroes the signal before it reaches the analyser or worklet,
-        // so VAD, encoding, and WS send are all unaware of mute.
-        const muteGain = ctx.createGain();
-        muteGain.gain.value = muteRef.current ? 0 : 1;
-        muteGainRef.current = muteGain;
-        micSource.connect(muteGain);
+      const grpcStream = new GrpcBidiStream<CallClientMessage, CallServerMessage>(
+        `${GRPC_BASE}/vaani.CallService/StreamCall`,
+        {},
+        (req) => req.serializeBinary(),
+        (bytes) => CallServerMessage.deserializeBinary(bytes),
+      );
+      grpcStreamRef.current = grpcStream;
 
-        const analyser = ctx.createAnalyser();
-        analyser.fftSize = 512;
-        muteGain.connect(analyser);
-        const freqBins = new Uint8Array(analyser.frequencyBinCount);
-
-        const worklet = new AudioWorkletNode(ctx, "audio-processor");
-        processorRef.current = worklet;
-
-        worklet.port.onmessage = (e) => {
-          if (ws.readyState !== WebSocket.OPEN) return;
-
-          const float32: Float32Array = e.data;
-          const int16 = new Int16Array(float32.length);
-          for (let i = 0; i < float32.length; i++) {
-            int16[i] = Math.max(-32768, Math.min(32767, float32[i] * 32767));
+      grpcStream.on("data", (msg: CallServerMessage) => {
+        if (msg.hasMetadata()) {
+          const id = msg.getMetadata()!.getSessionId();
+          setSessionId(id);
+          addLog(`Session ID: ${id}`);
+        } else if (msg.hasAudio()) {
+          playPcmChunk(msg.getAudio()!.getPcmData_asU8());
+        } else if (msg.hasEndCall()) {
+          addLog("Call ended by server.");
+          closingRef.current = true;
+          grpcStream.cancel();
+          if (silenceTimerRef.current) {
+            clearTimeout(silenceTimerRef.current);
+            silenceTimerRef.current = null;
           }
-          ws.send(int16.buffer);
-
-          analyser.getByteFrequencyData(freqBins);
-          const avg = voiceBandAvg(freqBins, ctx.sampleRate, analyser.fftSize);
-          const speaking = avg > VAD_SILENCE_THRESHOLD;
-          ws.send(JSON.stringify({ type: "vad", speaking }));
-
-          if (speaking) {
-            if (silenceTimerRef.current) {
-              clearTimeout(silenceTimerRef.current);
-              silenceTimerRef.current = null;
-            }
-            if (!prevSpeakingRef.current) {
-              prevSpeakingRef.current = true;
-              if (agentPlayingRef.current) {
-                stopAgentAudio();
-              } else {
-                setSpeaker("user");
-              }
-            }
-          } else if (prevSpeakingRef.current && !silenceTimerRef.current) {
-            silenceTimerRef.current = setTimeout(() => {
-              silenceTimerRef.current = null;
-              prevSpeakingRef.current = false;
-              if (!agentPlayingRef.current) setSpeaker("silent");
-            }, VAD_SILENCE_DEBOUNCE_MS);
-          }
-        };
-
-        muteGain.connect(worklet);
-      })();
-    };
-
-    ws.onmessage = (e) => {
-      if (typeof e.data === "string") {
-        try {
-          const msg = JSON.parse(e.data) as Record<string, unknown>;
-          if (msg.type === "metadata" && typeof msg.session_id === "string") {
-            setSessionId(msg.session_id);
-            addLog(`Session ID: ${msg.session_id}`);
-          }
-        } catch {
-          addLog(`Server message: ${e.data}`);
+          cleanup();
+          setStatus("disconnected");
+          setSpeaker("silent");
         }
-      } else if (e.data instanceof ArrayBuffer) {
-        playPcmChunk(e.data);
-      }
-    };
+      });
 
-    ws.onerror = () => addLog("WebSocket error.");
+      grpcStream.on("error", (err: Error) => addLog(`gRPC error: ${err.message}`));
+      grpcStream.on("end", () => {
+        cleanup();
+        if (!closingRef.current) {
+          addLog("Disconnected from server.");
+          setStatus("disconnected");
+        }
+      });
 
-    ws.onclose = () => {
-      cleanup();
-      if (!closingRef.current) {
-        addLog("Disconnected from server.");
-        setStatus("disconnected");
-      }
-    };
-  }, [addLog, cleanup, playPcmChunk, stopAgentAudio]);
+      setStatus("active");
+      addLog("gRPC stream opened.");
+
+      await setupAudioWorklet(
+        stream,
+        (pcm) => {
+          const chunk = new AudioChunk();
+          chunk.setPcmData(pcm);
+          const msg = new CallClientMessage();
+          msg.setAudio(chunk);
+          grpcStream.write(msg);
+        },
+        (speaking) => {
+          const signal = new VadSignal();
+          signal.setSpeaking(speaking);
+          const msg = new CallClientMessage();
+          msg.setVad(signal);
+          grpcStream.write(msg);
+        },
+      );
+    }
+  }, [transport, addLog, cleanup, playPcmChunk, setupAudioWorklet]);
 
   useEffect(() => {
     return () => {
@@ -264,6 +342,7 @@ export default function CallPage() {
       if (silenceTimerRef.current) clearTimeout(silenceTimerRef.current);
       cleanup();
       wsRef.current?.close();
+      grpcStreamRef.current?.cancel();
       audioCtxRef.current?.close();
     };
   }, [cleanup]);
@@ -275,28 +354,49 @@ export default function CallPage() {
     <div className="min-h-screen flex flex-col items-center justify-center bg-linear-to-br from-blue-50 to-indigo-100 dark:from-slate-900 dark:to-slate-800 p-4">
       <div className="flex flex-col items-center gap-6 w-full max-w-lg">
         <div className="text-center">
-          <h1 className="text-4xl font-bold text-slate-900 dark:text-white mb-2">
-            Call
-          </h1>
-          <p className="text-lg text-slate-600 dark:text-slate-400">
-            Real-time audio session
-          </p>
+          <h1 className="text-4xl font-bold text-slate-900 dark:text-white mb-2">Call</h1>
+          <p className="text-lg text-slate-600 dark:text-slate-400">Real-time audio session</p>
         </div>
 
         {/* Status & controls card */}
         <div className="w-full bg-white dark:bg-slate-800 rounded-xl shadow-lg p-6 flex flex-col gap-5">
           <div className="flex items-center justify-between">
-            <span className="text-sm font-medium text-slate-500 dark:text-slate-400">
-              Status
-            </span>
+            <span className="text-sm font-medium text-slate-500 dark:text-slate-400">Status</span>
             <StatusBadge status={status} />
+          </div>
+
+          {/* Transport toggle — only interactive when idle/disconnected */}
+          <div className="flex items-center justify-between">
+            <span className="text-sm font-medium text-slate-500 dark:text-slate-400">Transport</span>
+            <div className="flex items-center gap-2">
+              <span className={`text-xs transition-colors ${transport === "websocket" ? "font-semibold text-slate-700 dark:text-slate-200" : "text-slate-400 dark:text-slate-500"}`}>
+                WebSocket
+              </span>
+              <button
+                role="switch"
+                aria-checked={transport === "grpc"}
+                aria-label="Toggle transport"
+                onClick={() => setTransport((t) => t === "websocket" ? "grpc" : "websocket")}
+                disabled={isActive || isConnecting}
+                className={`relative w-10 h-5 rounded-full transition-colors disabled:opacity-40 disabled:cursor-not-allowed focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-indigo-500 ${
+                  transport === "grpc" ? "bg-indigo-500" : "bg-slate-300 dark:bg-slate-600"
+                }`}
+              >
+                <span
+                  className={`absolute top-0.5 left-0.5 w-4 h-4 rounded-full bg-white shadow transition-transform ${
+                    transport === "grpc" ? "translate-x-5" : "translate-x-0"
+                  }`}
+                />
+              </button>
+              <span className={`text-xs transition-colors ${transport === "grpc" ? "font-semibold text-slate-700 dark:text-slate-200" : "text-slate-400 dark:text-slate-500"}`}>
+                gRPC
+              </span>
+            </div>
           </div>
 
           {sessionId && (
             <div className="flex items-center justify-between gap-4">
-              <span className="text-sm font-medium text-slate-500 dark:text-slate-400 shrink-0">
-                Session
-              </span>
+              <span className="text-sm font-medium text-slate-500 dark:text-slate-400 shrink-0">Session</span>
               <span className="text-xs font-mono text-slate-700 dark:text-slate-300 bg-slate-100 dark:bg-slate-700 px-2 py-1 rounded truncate">
                 {sessionId}
               </span>
@@ -305,9 +405,7 @@ export default function CallPage() {
 
           {isActive && (
             <div className="flex items-center justify-between">
-              <span className="text-sm font-medium text-slate-500 dark:text-slate-400">
-                Speaking
-              </span>
+              <span className="text-sm font-medium text-slate-500 dark:text-slate-400">Speaking</span>
               <SpeakerBadge speaker={speaker} />
             </div>
           )}
@@ -319,18 +417,10 @@ export default function CallPage() {
                 disabled={isConnecting}
                 aria-label={isActive ? "End call" : "Start call"}
                 className={`w-24 h-24 rounded-full flex items-center justify-center shadow-lg transition-all active:scale-95 disabled:opacity-50 disabled:cursor-not-allowed text-white ${
-                  isActive
-                    ? "bg-red-500 hover:bg-red-600"
-                    : "bg-green-500 hover:bg-green-600"
+                  isActive ? "bg-red-500 hover:bg-red-600" : "bg-green-500 hover:bg-green-600"
                 }`}
               >
-                {isConnecting ? (
-                  <SpinnerIcon />
-                ) : isActive ? (
-                  <EndCallIcon />
-                ) : (
-                  <PhoneIcon />
-                )}
+                {isConnecting ? <SpinnerIcon /> : isActive ? <EndCallIcon /> : <PhoneIcon />}
               </button>
 
               {isActive && (
@@ -355,9 +445,7 @@ export default function CallPage() {
             </div>
             <p className="text-sm text-slate-500 dark:text-slate-400">
               {isActive
-                ? muted
-                  ? "Muted"
-                  : "Tap to end call"
+                ? muted ? "Muted" : "Tap to end call"
                 : isConnecting
                 ? "Connecting..."
                 : "Tap to start call"}
@@ -372,15 +460,10 @@ export default function CallPage() {
           </h2>
           <div className="h-44 overflow-y-auto flex flex-col gap-0.5 font-mono text-xs">
             {logs.length === 0 ? (
-              <p className="text-slate-400 dark:text-slate-500 text-center mt-10">
-                No activity yet
-              </p>
+              <p className="text-slate-400 dark:text-slate-500 text-center mt-10">No activity yet</p>
             ) : (
               logs.map((log, i) => (
-                <div
-                  key={i}
-                  className="text-slate-600 dark:text-slate-400 leading-relaxed"
-                >
+                <div key={i} className="text-slate-600 dark:text-slate-400 leading-relaxed">
                   {log}
                 </div>
               ))
@@ -401,30 +484,15 @@ export default function CallPage() {
 
 function SpeakerBadge({ speaker }: { speaker: Speaker }) {
   const styles: Record<Speaker, { label: string; cls: string }> = {
-    silent: {
-      label: "SILENT",
-      cls: "bg-slate-100 text-slate-500 dark:bg-slate-700 dark:text-slate-400",
-    },
-    user: {
-      label: "USER",
-      cls: "bg-blue-100 text-blue-700 dark:bg-blue-900 dark:text-blue-300",
-    },
-    agent: {
-      label: "AGENT",
-      cls: "bg-purple-100 text-purple-700 dark:bg-purple-900 dark:text-purple-300",
-    },
+    silent: { label: "SILENT", cls: "bg-slate-100 text-slate-500 dark:bg-slate-700 dark:text-slate-400" },
+    user: { label: "USER", cls: "bg-blue-100 text-blue-700 dark:bg-blue-900 dark:text-blue-300" },
+    agent: { label: "AGENT", cls: "bg-purple-100 text-purple-700 dark:bg-purple-900 dark:text-purple-300" },
   };
   const { label, cls } = styles[speaker];
   return (
-    <span
-      className={`inline-flex items-center gap-1.5 px-3 py-1 rounded-full text-xs font-bold tracking-wide ${cls}`}
-    >
+    <span className={`inline-flex items-center gap-1.5 px-3 py-1 rounded-full text-xs font-bold tracking-wide ${cls}`}>
       {speaker !== "silent" && (
-        <span
-          className={`w-2 h-2 rounded-full animate-pulse ${
-            speaker === "user" ? "bg-blue-500" : "bg-purple-500"
-          }`}
-        />
+        <span className={`w-2 h-2 rounded-full animate-pulse ${speaker === "user" ? "bg-blue-500" : "bg-purple-500"}`} />
       )}
       {label}
     </span>
@@ -433,31 +501,15 @@ function SpeakerBadge({ speaker }: { speaker: Speaker }) {
 
 function StatusBadge({ status }: { status: CallStatus }) {
   const styles: Record<CallStatus, { label: string; cls: string }> = {
-    idle: {
-      label: "Idle",
-      cls: "bg-slate-100 text-slate-600 dark:bg-slate-700 dark:text-slate-300",
-    },
-    connecting: {
-      label: "Connecting",
-      cls: "bg-yellow-100 text-yellow-700 dark:bg-yellow-900 dark:text-yellow-300",
-    },
-    active: {
-      label: "Active",
-      cls: "bg-green-100 text-green-700 dark:bg-green-900 dark:text-green-300",
-    },
-    disconnected: {
-      label: "Disconnected",
-      cls: "bg-red-100 text-red-700 dark:bg-red-900 dark:text-red-300",
-    },
+    idle: { label: "Idle", cls: "bg-slate-100 text-slate-600 dark:bg-slate-700 dark:text-slate-300" },
+    connecting: { label: "Connecting", cls: "bg-yellow-100 text-yellow-700 dark:bg-yellow-900 dark:text-yellow-300" },
+    active: { label: "Active", cls: "bg-green-100 text-green-700 dark:bg-green-900 dark:text-green-300" },
+    disconnected: { label: "Disconnected", cls: "bg-red-100 text-red-700 dark:bg-red-900 dark:text-red-300" },
   };
   const { label, cls } = styles[status];
   return (
-    <span
-      className={`inline-flex items-center gap-1.5 px-3 py-1 rounded-full text-xs font-semibold ${cls}`}
-    >
-      {status === "active" && (
-        <span className="w-2 h-2 rounded-full bg-green-500 animate-pulse" />
-      )}
+    <span className={`inline-flex items-center gap-1.5 px-3 py-1 rounded-full text-xs font-semibold ${cls}`}>
+      {status === "active" && <span className="w-2 h-2 rounded-full bg-green-500 animate-pulse" />}
       {label}
     </span>
   );
@@ -481,13 +533,7 @@ function EndCallIcon() {
 
 function SpinnerIcon() {
   return (
-    <svg
-      className="w-9 h-9 animate-spin"
-      viewBox="0 0 24 24"
-      fill="none"
-      stroke="currentColor"
-      strokeWidth={2.5}
-    >
+    <svg className="w-9 h-9 animate-spin" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2.5}>
       <circle cx={12} cy={12} r={10} strokeOpacity={0.25} />
       <path d="M12 2a10 10 0 0 1 10 10" />
     </svg>
