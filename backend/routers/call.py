@@ -4,7 +4,7 @@ from datetime import datetime, timezone
 
 from fastapi import APIRouter, WebSocket
 
-from database.save_fn import save_call_session
+from database import save_call_session
 from sessions import CallSession, register_call, unregister_call
 
 router = APIRouter()

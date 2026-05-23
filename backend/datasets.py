@@ -1,6 +1,6 @@
 
 from sqlalchemy import and_
-from database.models import CallSessionRecord
+from database import CallSessionRecord
 
 def _nonnull(*columns: str):
     parts = []

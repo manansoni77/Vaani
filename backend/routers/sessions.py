@@ -6,7 +6,7 @@ from fastapi import APIRouter, HTTPException, Query, WebSocket, WebSocketDisconn
 from pydantic import BaseModel
 from sqlalchemy.orm import Session
 
-from database.models import CallSessionRecord
+from database import CallSessionRecord
 from constants import LOG_ENTITIES, QUERY_TYPE
 from sessions import (
     HumanAgentSession,

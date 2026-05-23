@@ -1,5 +1,5 @@
 from sqlalchemy import Boolean, Column, Float, Integer, String, Text
-from . import Base
+from .engine import Base
 
 
 class LogEntry(Base):

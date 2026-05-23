@@ -6,8 +6,7 @@ from fastapi import APIRouter, Query, WebSocket, WebSocketDisconnect
 from pydantic import BaseModel
 from sqlalchemy.orm import Session
 
-from database import get_engine
-from database.models import LogEntry
+from database import get_engine, LogEntry
 from loggers import LogBroadcaster, levels_at_or_above, parse_level
 
 router = APIRouter(prefix="/logs", tags=["logs"])

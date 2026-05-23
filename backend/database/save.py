@@ -1,7 +1,7 @@
 from sqlalchemy.orm import Session
 from constants import LOG_ENTITIES
 from loggers import get_logger
-from . import get_engine
+from .engine import get_engine
 from .models import CallSessionRecord
 
 _default_logger = get_logger(LOG_ENTITIES.APP)

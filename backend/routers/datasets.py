@@ -1,9 +1,8 @@
 from fastapi import APIRouter, HTTPException, Query
 from pydantic import BaseModel
 from sqlalchemy.orm import Session
-from database.models import CallSessionRecord
+from database import get_engine, CallSessionRecord
 from datasets import DATASETS
-from database import get_engine
 
 router = APIRouter(prefix="/datasets", tags=["datasets"])
 

@@ -1,17 +1,5 @@
-from sqlalchemy import create_engine
-from config import DB_URL
-from sqlalchemy.orm import DeclarativeBase
+from .engine import Base, get_engine
+from .models import LogEntry, CallSessionRecord
+from .save import save_call_session
 
-_engine = None
-
-
-class Base(DeclarativeBase):
-    pass
-
-
-def get_engine():
-    global _engine
-    if _engine is None:
-        _engine = create_engine(DB_URL)
-        Base.metadata.create_all(_engine)
-    return _engine
+__all__ = ["Base", "get_engine", "LogEntry", "CallSessionRecord", "save_call_session"]

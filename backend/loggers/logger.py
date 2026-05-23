@@ -2,8 +2,7 @@ import logging
 from datetime import datetime, timezone
 from config import DB_URL
 from sqlalchemy.orm import Session
-from database import get_engine
-from database.models import LogEntry
+from database import get_engine, LogEntry
 
 
 class LogFormat(logging.Formatter):
