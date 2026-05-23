@@ -1,6 +1,6 @@
 import os
 from openai import AsyncOpenAI
-from logging_module.logger import get_logger
+from loggers import get_logger
 from constants import LOG_ENTITIES
 
 # Fallback logger used when no per-session logger is supplied by the caller.

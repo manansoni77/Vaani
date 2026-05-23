@@ -3,7 +3,7 @@ from pydantic import BaseModel
 from sqlalchemy.orm import Session
 from database.models import CallSessionRecord
 from datasets import DATASETS
-from logging_module.logger import get_engine
+from database import get_engine
 
 router = APIRouter(prefix="/datasets", tags=["datasets"])
 

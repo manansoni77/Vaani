@@ -1,6 +1,6 @@
 from sqlalchemy.orm import Session
 from constants import LOG_ENTITIES
-from logging_module.logger import get_logger
+from loggers import get_logger
 from . import get_engine
 from .models import CallSessionRecord
 

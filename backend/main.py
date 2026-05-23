@@ -4,7 +4,7 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from config import R2_ACCOUNT_ID, R2_BUCKET_NAME
 from constants import LOG_ENTITIES
-from logging_module.logger import get_logger, setup_logging
+from loggers import get_logger, setup_logging
 from routers import call_router, datasets_router, logs_router, sessions_router
 
 _app_log = get_logger(LOG_ENTITIES.APP)

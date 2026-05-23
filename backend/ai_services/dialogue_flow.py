@@ -8,7 +8,7 @@ from constants import (
     LOG_ENTITIES,
 )
 from ai_services.prompts import PROMPTS
-from logging_module.logger import get_logger
+from loggers import get_logger
 
 llm_client = LLMClient()
 

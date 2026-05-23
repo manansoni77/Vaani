@@ -15,7 +15,8 @@ from sessions import (
     register_human,
     unregister_human,
 )
-from logging_module.logger import get_engine, get_logger
+from database import get_engine
+from loggers import get_logger
 
 router = APIRouter(prefix="/sessions", tags=["sessions"])
 _log = get_logger(LOG_ENTITIES.APP)

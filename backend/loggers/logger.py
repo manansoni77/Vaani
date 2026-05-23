@@ -36,7 +36,7 @@ class DBHandler(logging.Handler):
 
 
 def setup_logging(print_logs: bool = True) -> None:
-    from logging_module.log_broadcaster import BroadcastHandler
+    from .broadcaster import BroadcastHandler
 
     print(f"Setting up logging — print_logs={print_logs}, DB_URL={DB_URL}")
     root = logging.getLogger("helpline")
