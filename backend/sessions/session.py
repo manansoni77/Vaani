@@ -13,7 +13,7 @@ from ai_services.dialogue_flow import DialogueFlow
 from ai_services.stt_tts import get_caller_stt_client, get_tts_client
 from ai_services.stt_tts.base import BaseTTSClient
 from logging_module.logger import get_logger
-from sessions.session_broadcaster import SessionBroadcaster, build_status
+from .broadcaster import SessionBroadcaster, build_status
 
 
 
