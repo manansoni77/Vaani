@@ -2,9 +2,6 @@ import logging
 from datetime import datetime, timezone
 from config import DB_URL
 from sqlalchemy.orm import Session
-from database import get_engine, LogEntry
-
-
 class LogFormat(logging.Formatter):
     def format(self, record: logging.LogRecord) -> str:
         ts = datetime.now(timezone.utc).isoformat(timespec="milliseconds")
@@ -15,6 +12,7 @@ class LogFormat(logging.Formatter):
 
 class DBHandler(logging.Handler):
     def emit(self, record: logging.LogRecord) -> None:
+        from database import get_engine, LogEntry
         ts = datetime.now(timezone.utc).isoformat(timespec="milliseconds")
         entity = getattr(record, "entity", record.name)
         session_id = getattr(record, "session_id", "NA")
@@ -80,6 +78,8 @@ if __name__ == "__main__":
     tts_log.warning("received 0 audio chunks — codec may be unsupported")
     tts_log.error("connection closed unexpectedly: ConnectionClosedOK(1000)")
     call_log.info("session ended — raw audio saved")
+
+    from database import get_engine, LogEntry
 
     with Session(get_engine()) as s:
         rows = s.query(LogEntry).all()

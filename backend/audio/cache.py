@@ -2,7 +2,7 @@ import io
 import os
 import wave
 from config import PRERECORDED_DIR, PCM_CHUNK_SIZE
-from constants import PRERECORDED_AUDIO
+from .phrases import PRERECORDED_AUDIO
 
 
 def _cache_path(phrase: PRERECORDED_AUDIO, lang: str) -> str:

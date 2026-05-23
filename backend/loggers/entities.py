@@ -1,0 +1,11 @@
+from enum import Enum
+
+
+class LOG_ENTITIES(str, Enum):
+    APP = "APP"
+    CALL = "CALL"
+    SARVAM_STT = "SARVAM_STT"
+    SARVAM_TTS = "SARVAM_TTS"
+    OPENAI_LLM = "OPENAI_LLM"
+    DIALOGUE_FLOW = "DIALOGUE_FLOW"
+    HUMAN_AGENT = "HUMAN_AGENT"

@@ -1,14 +1,9 @@
 from typing import cast
-from ai_services.llm_client import LLMClient
-from constants import (
-    CONFIDENCE_LEVEL,
-    PHASE,
-    CaptureAndValidationResponse,
-    SemanticMemory,
-    LOG_ENTITIES,
-)
-from ai_services.prompts import PROMPTS
-from loggers import get_logger
+from .llm import LLMClient
+from constants import CONFIDENCE_LEVEL, PHASE
+from .schemas import CaptureAndValidationResponse, SemanticMemory
+from .prompts import PROMPTS
+from loggers import get_logger, LOG_ENTITIES
 
 llm_client = LLMClient()
 
@@ -95,8 +90,6 @@ class DialogueFlow:
             self.log.info(
                 "get_response called in GREETING phase — use stream_greeting(); falling back"
             )
-            # prompt = prompt_fn()
-            # response = llm_client.stream_completion(system_prompt=prompt[0], user_prompt=prompt[1])
             async for chunk in self.stream_greeting():
                 yield chunk
             return
@@ -137,12 +130,9 @@ class DialogueFlow:
                 since_when=response.since_when,
             )
             self.agent_confidence = response.agent_confidence
-            # log 1
             self.log.info(
                 f"semantic_memory rebuilt — lang={locked_language!r} turns={self.turns}"
             )
-            # if self.semantic_memory.query_type == QUERY_TYPE.EMERGENCY:
-            #     self.max_turns = min(self.max_turns, 2)  # one-way ratchet — never resets back up
             if self.turns >= self.max_turns or response.follow_up == False:
                 if response.agent_confidence in [
                     CONFIDENCE_LEVEL.GREEN,
@@ -151,7 +141,6 @@ class DialogueFlow:
                     yield response.response
 
                     self.phase = PHASE.VALIDATION
-                    # Tranistioning to validation phase tried to handle that through Prompt
                     self.log.info(
                         "phase transitioning to VALIDATION based on follow_up=false"
                     )

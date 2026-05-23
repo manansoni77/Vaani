@@ -1,5 +1,6 @@
 from typing import Callable
-from constants import PHASE, SemanticMemory
+from constants import PHASE
+from .schemas import SemanticMemory
 
 PromptTuple = tuple[str, str]
 

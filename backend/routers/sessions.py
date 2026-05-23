@@ -7,7 +7,7 @@ from pydantic import BaseModel
 from sqlalchemy.orm import Session
 
 from database import CallSessionRecord
-from constants import LOG_ENTITIES, QUERY_TYPE
+from constants import QUERY_TYPE
 from sessions import (
     HumanAgentSession,
     SessionBroadcaster,
@@ -16,7 +16,7 @@ from sessions import (
     unregister_human,
 )
 from database import get_engine
-from loggers import get_logger
+from loggers import get_logger, LOG_ENTITIES
 
 router = APIRouter(prefix="/sessions", tags=["sessions"])
 _log = get_logger(LOG_ENTITIES.APP)
