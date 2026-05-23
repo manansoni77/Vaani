@@ -1,4 +1,6 @@
-from .router_call import router as call_router
-from .router_datasets import router as datasets_router
-from .router_logs import router as logs_router
-from .router_sessions import router as sessions_router
+from .call import router as call_router
+from .datasets import router as datasets_router
+from .logs import router as logs_router
+from .sessions import router as sessions_router
+
+__all__ = ["call_router", "datasets_router", "logs_router", "sessions_router"]
