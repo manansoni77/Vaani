@@ -4,6 +4,8 @@ import { useState, useRef, useEffect, useCallback } from "react";
 import Link from "next/link";
 
 import { API_BASE, WS_BASE } from "@/lib/config";
+import { useAudioStream } from "@/lib/hooks/useAudioStream";
+import type { SpeakerState } from "@/lib/hooks/useAudioStream";
 
 type Tab = "live" | "history";
 type Phase = "GREETING" | "CAPTURE" | "VALIDATION" | "DECISION" | "COMPLETE";
@@ -163,31 +165,35 @@ export default function AdminPage() {
       p.set("order", order);
       p.set("limit", String(PAGE_SIZE));
       p.set("offset", String(offset));
-      const qt = queryTypeOverride !== undefined ? queryTypeOverride : historyQueryType;
+      const qt =
+        queryTypeOverride !== undefined ? queryTypeOverride : historyQueryType;
       if (qt) p.set("query_type", qt);
       return p.toString();
     },
     [startDate, endDate, order, historyQueryType],
   );
 
-  const fetchHistory = useCallback(async (queryTypeOverride?: string) => {
-    setHistoryLoading(true);
-    try {
-      const res = await fetch(
-        `${API_BASE}/sessions/history?${buildHistoryQuery(0, queryTypeOverride)}`,
-      );
-      if (!res.ok) throw new Error();
-      const data: Session[] = await res.json();
-      setHistory(data);
-      historyOffsetRef.current = data.length;
-      setHistoryHasMore(data.length === PAGE_SIZE);
-      setHistoryFetched(true);
-    } catch {
-      setHistoryFetched(true);
-    } finally {
-      setHistoryLoading(false);
-    }
-  }, [buildHistoryQuery]);
+  const fetchHistory = useCallback(
+    async (queryTypeOverride?: string) => {
+      setHistoryLoading(true);
+      try {
+        const res = await fetch(
+          `${API_BASE}/sessions/history?${buildHistoryQuery(0, queryTypeOverride)}`,
+        );
+        if (!res.ok) throw new Error();
+        const data: Session[] = await res.json();
+        setHistory(data);
+        historyOffsetRef.current = data.length;
+        setHistoryHasMore(data.length === PAGE_SIZE);
+        setHistoryFetched(true);
+      } catch {
+        setHistoryFetched(true);
+      } finally {
+        setHistoryLoading(false);
+      }
+    },
+    [buildHistoryQuery],
+  );
 
   const loadMoreHistory = useCallback(async () => {
     setHistoryLoading(true);
@@ -336,10 +342,34 @@ export default function AdminPage() {
                   <div className="flex items-center gap-1">
                     {(
                       [
-                        { value: "", label: "All", active: "bg-slate-700 text-white", inactive: "bg-slate-100 dark:bg-slate-800 text-slate-600 dark:text-slate-300 hover:bg-slate-200 dark:hover:bg-slate-700" },
-                        { value: "EMERGENCY", label: "Emergency", active: "bg-red-600 text-white", inactive: "bg-red-50 dark:bg-red-900/30 text-red-700 dark:text-red-300 hover:bg-red-100 dark:hover:bg-red-900/50" },
-                        { value: "MUNICIPALITY", label: "Municipality", active: "bg-amber-500 text-white", inactive: "bg-amber-50 dark:bg-amber-900/30 text-amber-700 dark:text-amber-300 hover:bg-amber-100 dark:hover:bg-amber-900/50" },
-                        { value: "GENERAL", label: "General", active: "bg-blue-600 text-white", inactive: "bg-blue-50 dark:bg-blue-900/30 text-blue-700 dark:text-blue-300 hover:bg-blue-100 dark:hover:bg-blue-900/50" },
+                        {
+                          value: "",
+                          label: "All",
+                          active: "bg-slate-700 text-white",
+                          inactive:
+                            "bg-slate-100 dark:bg-slate-800 text-slate-600 dark:text-slate-300 hover:bg-slate-200 dark:hover:bg-slate-700",
+                        },
+                        {
+                          value: "EMERGENCY",
+                          label: "Emergency",
+                          active: "bg-red-600 text-white",
+                          inactive:
+                            "bg-red-50 dark:bg-red-900/30 text-red-700 dark:text-red-300 hover:bg-red-100 dark:hover:bg-red-900/50",
+                        },
+                        {
+                          value: "MUNICIPALITY",
+                          label: "Municipality",
+                          active: "bg-amber-500 text-white",
+                          inactive:
+                            "bg-amber-50 dark:bg-amber-900/30 text-amber-700 dark:text-amber-300 hover:bg-amber-100 dark:hover:bg-amber-900/50",
+                        },
+                        {
+                          value: "GENERAL",
+                          label: "General",
+                          active: "bg-blue-600 text-white",
+                          inactive:
+                            "bg-blue-50 dark:bg-blue-900/30 text-blue-700 dark:text-blue-300 hover:bg-blue-100 dark:hover:bg-blue-900/50",
+                        },
                       ] as const
                     ).map(({ value, label, active, inactive }) => (
                       <button
@@ -360,62 +390,62 @@ export default function AdminPage() {
                   </div>
                   {/* Date / order filters */}
                   <div className="flex flex-wrap items-center gap-2">
-                  <input
-                    type="datetime-local"
-                    value={startDate}
-                    onChange={(e) => setStartDate(e.target.value)}
-                    disabled={historyLoading}
-                    className="px-3 py-1.5 text-sm bg-white dark:bg-slate-800 border border-slate-300 dark:border-slate-600 rounded-lg text-slate-900 dark:text-white disabled:opacity-50 focus:outline-none focus:ring-2 focus:ring-green-400"
-                  />
-                  <input
-                    type="datetime-local"
-                    value={endDate}
-                    onChange={(e) => setEndDate(e.target.value)}
-                    disabled={historyLoading}
-                    className="px-3 py-1.5 text-sm bg-white dark:bg-slate-800 border border-slate-300 dark:border-slate-600 rounded-lg text-slate-900 dark:text-white disabled:opacity-50 focus:outline-none focus:ring-2 focus:ring-green-400"
-                  />
-                  <select
-                    value={order}
-                    onChange={(e) =>
-                      setOrder(e.target.value as "newest" | "oldest")
-                    }
-                    disabled={historyLoading}
-                    className="px-3 py-1.5 text-sm bg-white dark:bg-slate-800 border border-slate-300 dark:border-slate-600 rounded-lg text-slate-900 dark:text-white disabled:opacity-50 focus:outline-none focus:ring-2 focus:ring-green-400"
-                  >
-                    <option value="newest">Newest first</option>
-                    <option value="oldest">Oldest first</option>
-                  </select>
-                  <button
-                    onClick={() => fetchHistory()}
-                    disabled={historyLoading}
-                    className="px-4 py-1.5 bg-slate-700 hover:bg-slate-800 disabled:opacity-50 text-white text-sm font-semibold rounded-lg transition-colors"
-                  >
-                    Search
-                  </button>
-                  {historyHasMore && (
-                    <button
-                      onClick={loadMoreHistory}
+                    <input
+                      type="datetime-local"
+                      value={startDate}
+                      onChange={(e) => setStartDate(e.target.value)}
                       disabled={historyLoading}
-                      className="px-4 py-1.5 bg-green-600 hover:bg-green-700 disabled:opacity-50 text-white text-sm font-semibold rounded-lg transition-colors"
+                      className="px-3 py-1.5 text-sm bg-white dark:bg-slate-800 border border-slate-300 dark:border-slate-600 rounded-lg text-slate-900 dark:text-white disabled:opacity-50 focus:outline-none focus:ring-2 focus:ring-green-400"
+                    />
+                    <input
+                      type="datetime-local"
+                      value={endDate}
+                      onChange={(e) => setEndDate(e.target.value)}
+                      disabled={historyLoading}
+                      className="px-3 py-1.5 text-sm bg-white dark:bg-slate-800 border border-slate-300 dark:border-slate-600 rounded-lg text-slate-900 dark:text-white disabled:opacity-50 focus:outline-none focus:ring-2 focus:ring-green-400"
+                    />
+                    <select
+                      value={order}
+                      onChange={(e) =>
+                        setOrder(e.target.value as "newest" | "oldest")
+                      }
+                      disabled={historyLoading}
+                      className="px-3 py-1.5 text-sm bg-white dark:bg-slate-800 border border-slate-300 dark:border-slate-600 rounded-lg text-slate-900 dark:text-white disabled:opacity-50 focus:outline-none focus:ring-2 focus:ring-green-400"
                     >
-                      Load More
+                      <option value="newest">Newest first</option>
+                      <option value="oldest">Oldest first</option>
+                    </select>
+                    <button
+                      onClick={() => fetchHistory()}
+                      disabled={historyLoading}
+                      className="px-4 py-1.5 bg-slate-700 hover:bg-slate-800 disabled:opacity-50 text-white text-sm font-semibold rounded-lg transition-colors"
+                    >
+                      Search
                     </button>
-                  )}
-                  {historyLoading && (
-                    <span className="flex items-center gap-1.5 text-sm text-slate-500 dark:text-slate-400">
-                      <svg
-                        className="w-4 h-4 animate-spin"
-                        viewBox="0 0 24 24"
-                        fill="none"
-                        stroke="currentColor"
-                        strokeWidth={2.5}
+                    {historyHasMore && (
+                      <button
+                        onClick={loadMoreHistory}
+                        disabled={historyLoading}
+                        className="px-4 py-1.5 bg-green-600 hover:bg-green-700 disabled:opacity-50 text-white text-sm font-semibold rounded-lg transition-colors"
                       >
-                        <circle cx={12} cy={12} r={10} strokeOpacity={0.25} />
-                        <path d="M12 2a10 10 0 0 1 10 10" />
-                      </svg>
-                      Loading...
-                    </span>
-                  )}
+                        Load More
+                      </button>
+                    )}
+                    {historyLoading && (
+                      <span className="flex items-center gap-1.5 text-sm text-slate-500 dark:text-slate-400">
+                        <svg
+                          className="w-4 h-4 animate-spin"
+                          viewBox="0 0 24 24"
+                          fill="none"
+                          stroke="currentColor"
+                          strokeWidth={2.5}
+                        >
+                          <circle cx={12} cy={12} r={10} strokeOpacity={0.25} />
+                          <path d="M12 2a10 10 0 0 1 10 10" />
+                        </svg>
+                        Loading...
+                      </span>
+                    )}
                   </div>
                 </div>
 
@@ -467,7 +497,9 @@ export default function AdminPage() {
                   const onMove = (ev: MouseEvent) => {
                     if (!isDraggingRef.current) return;
                     const delta = startX - ev.clientX;
-                    setPanelWidth(Math.min(900, Math.max(280, startWidth + delta)));
+                    setPanelWidth(
+                      Math.min(900, Math.max(280, startWidth + delta)),
+                    );
                   };
                   const onUp = () => {
                     isDraggingRef.current = false;
@@ -662,155 +694,52 @@ function DetailPanel({
   const twoCol = panelWidth >= 560;
   const [copied, setCopied] = useState(false);
   const [takingOver, setTakingOver] = useState(false);
-
-  // Audio streaming state
-  const [audioConnected, setAudioConnected] = useState(false);
   const [audioError, setAudioError] = useState<string | null>(null);
-  const [speaking, setSpeaking] = useState(false);
-  const audioWsRef = useRef<WebSocket | null>(null);
-  const streamRef = useRef<MediaStream | null>(null);
-  const audioCtxRef = useRef<AudioContext | null>(null);
-  const processorRef = useRef<ScriptProcessorNode | null>(null);
-  const speakingRef = useRef(false);
-  const nextPlayTimeRef = useRef(0);
-  const vadDebounceRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+
+  const {
+    status: audioStatus,
+    speaker: audioSpeaker,
+    muted: audioMuted,
+    connect: audioConnect,
+    disconnect: audioDisconnect,
+    toggleMute: audioToggleMute,
+  } = useAudioStream({
+    enableMute: true,
+    enableBargeIn: false,
+    ttsLookaheadSeconds: 0.05,
+    onLog: (msg) => {
+      if (
+        msg.includes("denied") ||
+        msg.includes("failed") ||
+        msg.includes("not supported")
+      ) {
+        setAudioError(msg);
+      }
+    },
+    // No onServerMessage — admin audio WS only sends binary TTS PCM frames.
+  });
+
+  const audioConnected = audioStatus === "active";
 
   const isMyClaim =
     live && !!session.human_takeover && session.claimed_by === agentId;
   const isOthersClaim =
     live && !!session.human_takeover && session.claimed_by !== agentId;
 
-  // Start audio when I claim this session
+  // Connect audio when this agent claims the session; disconnect on unclaim or unmount.
+  // audioError is only rendered inside the isMyClaim block so it is automatically
+  // hidden when isMyClaim is false — no need to clear it here.
   useEffect(() => {
-    if (!isMyClaim) return;
-    let cancelled = false;
-
-    const setup = async () => {
-      try {
-        const stream = await navigator.mediaDevices.getUserMedia({
-          audio: true,
-        });
-        if (cancelled) {
-          stream.getTracks().forEach((t) => t.stop());
-          return;
-        }
-        streamRef.current = stream;
-
-        const ctx = new AudioContext({ sampleRate: 16000 });
-        audioCtxRef.current = ctx;
-
-        const ws = new WebSocket(
-          `${WS_BASE}/sessions/${session.session_id}/audio?agent_id=${encodeURIComponent(agentId)}`,
-        );
-        audioWsRef.current = ws;
-
-        ws.onopen = () => {
-          if (cancelled) {
-            ws.close();
-            return;
-          }
-
-          const source = ctx.createMediaStreamSource(stream);
-          const processor = ctx.createScriptProcessor(4096, 1, 1);
-          processorRef.current = processor;
-
-          const silentGain = ctx.createGain();
-          silentGain.gain.value = 0;
-
-          processor.onaudioprocess = (e) => {
-            if (ws.readyState !== WebSocket.OPEN) return;
-            if (!speakingRef.current) return;
-            const float32 = e.inputBuffer.getChannelData(0);
-            const int16 = new Int16Array(float32.length);
-            for (let i = 0; i < float32.length; i++) {
-              int16[i] = Math.max(-32768, Math.min(32767, float32[i] * 32767));
-            }
-            ws.send(int16.buffer);
-          };
-
-          source.connect(processor);
-          processor.connect(silentGain);
-          silentGain.connect(ctx.destination);
-          setAudioConnected(true);
-        };
-
-        ws.binaryType = "arraybuffer";
-        ws.onmessage = (e: MessageEvent) => {
-          if (!(e.data instanceof ArrayBuffer) || e.data.byteLength === 0) return;
-          if (!ctx || ctx.state === "closed") return;
-
-          const int16 = new Int16Array(e.data);
-          const float32 = new Float32Array(int16.length);
-          for (let i = 0; i < int16.length; i++) {
-            float32[i] = int16[i] / 32768;
-          }
-
-          const buffer = ctx.createBuffer(1, float32.length, 16000);
-          buffer.copyToChannel(float32, 0);
-          const source = ctx.createBufferSource();
-          source.buffer = buffer;
-          source.connect(ctx.destination);
-
-          const now = ctx.currentTime;
-          const startAt = Math.max(now + 0.05, nextPlayTimeRef.current);
-          source.start(startAt);
-          nextPlayTimeRef.current = startAt + buffer.duration;
-        };
-
-        ws.onerror = () => setAudioError("Audio connection failed");
-        ws.onclose = () => {
-          if (!cancelled) setAudioConnected(false);
-        };
-      } catch {
-        if (!cancelled) setAudioError("Microphone access denied");
-      }
-    };
-
-    setup();
-
-    return () => {
-      cancelled = true;
-      processorRef.current?.disconnect();
-      streamRef.current?.getTracks().forEach((t) => t.stop());
-      if (audioCtxRef.current?.state !== "closed") {
-        audioCtxRef.current?.close().catch(() => {});
-      }
-      audioWsRef.current?.close();
-      if (vadDebounceRef.current) {
-        clearTimeout(vadDebounceRef.current);
-        vadDebounceRef.current = null;
-      }
-      setAudioConnected(false);
-      setSpeaking(false);
-      speakingRef.current = false;
-      nextPlayTimeRef.current = 0;
-    };
-  }, [isMyClaim, session.session_id, agentId]);
-
-  const sendVad = (isSpeaking: boolean) => {
-    if (isSpeaking) {
-      if (vadDebounceRef.current) {
-        clearTimeout(vadDebounceRef.current);
-        vadDebounceRef.current = null;
-      }
-      speakingRef.current = true;
-      const ws = audioWsRef.current;
-      if (ws?.readyState === WebSocket.OPEN) {
-        ws.send(JSON.stringify({ type: "vad", speaking: true }));
-      }
-      setSpeaking(true);
-    } else {
-      vadDebounceRef.current = setTimeout(() => {
-        vadDebounceRef.current = null;
-        speakingRef.current = false;
-        const ws = audioWsRef.current;
-        if (ws?.readyState === WebSocket.OPEN) {
-          ws.send(JSON.stringify({ type: "vad", speaking: false }));
-        }
-        setSpeaking(false);
-      }, 200);
+    if (!isMyClaim) {
+      audioDisconnect();
+      return;
     }
-  };
+    const url = `${WS_BASE}/sessions/${session.session_id}/audio?agent_id=${encodeURIComponent(agentId)}`;
+    audioConnect(url);
+    return () => {
+      audioDisconnect();
+    };
+  }, [isMyClaim, session.session_id, agentId, audioConnect, audioDisconnect]);
 
   const handleTakeover = async () => {
     setTakingOver(true);
@@ -981,7 +910,9 @@ function DetailPanel({
           No transcript yet
         </p>
       ) : (
-        <div className={`flex flex-col gap-1.5 overflow-y-auto ${twoCol ? "" : "max-h-80"}`}>
+        <div
+          className={`flex flex-col gap-1.5 overflow-y-auto ${twoCol ? "" : "max-h-80"}`}
+        >
           {transcriptLines.map((line, i) => {
             const match = line.match(/^(\w+)(?:\s*\(([^)]+)\))?:\s*(.*)/i);
             const role = match?.[1]?.toLowerCase() ?? "";
@@ -996,10 +927,10 @@ function DetailPanel({
               turnSentiment?.toLowerCase() === "angry"
                 ? "text-red-600 dark:text-red-400"
                 : turnSentiment?.toLowerCase() === "anxious"
-                ? "text-amber-600 dark:text-amber-400"
-                : turnSentiment?.toLowerCase() === "calm"
-                ? "text-green-600 dark:text-green-400"
-                : "opacity-60";
+                  ? "text-amber-600 dark:text-amber-400"
+                  : turnSentiment?.toLowerCase() === "calm"
+                    ? "text-green-600 dark:text-green-400"
+                    : "opacity-60";
 
             const cls = isAgent
               ? "bg-green-50 dark:bg-green-900/20 text-green-800 dark:text-green-300"
@@ -1026,7 +957,9 @@ function DetailPanel({
                   <span className="font-semibold text-xs uppercase tracking-wide block mb-0.5 opacity-60">
                     {label}
                     {turnSentiment && (
-                      <span className={`normal-case font-normal ml-1 ${sentimentCls}`}>
+                      <span
+                        className={`normal-case font-normal ml-1 ${sentimentCls}`}
+                      >
                         ({turnSentiment})
                       </span>
                     )}
@@ -1041,37 +974,52 @@ function DetailPanel({
     </div>
   );
 
-  const intelligenceSection = (session.summary || session.intent || session.key_details || session.agent_confidence || session.user_confidence) ? (
-    <div className="flex flex-col gap-2">
-      <span className="text-xs font-semibold text-slate-400 uppercase tracking-wide">
-        Intelligence
-      </span>
-      {session.summary && (
-        <div className="flex flex-col gap-0.5 bg-slate-50 dark:bg-slate-700/50 rounded-lg px-3 py-2.5">
-          <span className="text-xs text-slate-400">Summary</span>
-          <p className="text-xs text-slate-700 dark:text-slate-300 leading-relaxed">{session.summary}</p>
-        </div>
-      )}
-      {session.intent && (
-        <div className="flex flex-col gap-0.5 bg-slate-50 dark:bg-slate-700/50 rounded-lg px-3 py-2.5">
-          <span className="text-xs text-slate-400">Intent</span>
-          <p className="text-xs text-slate-700 dark:text-slate-300">{session.intent}</p>
-        </div>
-      )}
-      {session.key_details && (
-        <div className="flex flex-col gap-0.5 bg-slate-50 dark:bg-slate-700/50 rounded-lg px-3 py-2.5">
-          <span className="text-xs text-slate-400">Key Details</span>
-          <p className="text-xs text-slate-700 dark:text-slate-300 leading-relaxed">{session.key_details}</p>
-        </div>
-      )}
-      {(session.agent_confidence || session.user_confidence) && (
-        <div className="flex flex-wrap gap-1.5">
-          {session.agent_confidence && <ConfidenceBadge label="AI" level={session.agent_confidence} />}
-          {session.user_confidence && <ConfidenceBadge label="User" level={session.user_confidence} />}
-        </div>
-      )}
-    </div>
-  ) : null;
+  const intelligenceSection =
+    session.summary ||
+    session.intent ||
+    session.key_details ||
+    session.agent_confidence ||
+    session.user_confidence ? (
+      <div className="flex flex-col gap-2">
+        <span className="text-xs font-semibold text-slate-400 uppercase tracking-wide">
+          Intelligence
+        </span>
+        {session.summary && (
+          <div className="flex flex-col gap-0.5 bg-slate-50 dark:bg-slate-700/50 rounded-lg px-3 py-2.5">
+            <span className="text-xs text-slate-400">Summary</span>
+            <p className="text-xs text-slate-700 dark:text-slate-300 leading-relaxed">
+              {session.summary}
+            </p>
+          </div>
+        )}
+        {session.intent && (
+          <div className="flex flex-col gap-0.5 bg-slate-50 dark:bg-slate-700/50 rounded-lg px-3 py-2.5">
+            <span className="text-xs text-slate-400">Intent</span>
+            <p className="text-xs text-slate-700 dark:text-slate-300">
+              {session.intent}
+            </p>
+          </div>
+        )}
+        {session.key_details && (
+          <div className="flex flex-col gap-0.5 bg-slate-50 dark:bg-slate-700/50 rounded-lg px-3 py-2.5">
+            <span className="text-xs text-slate-400">Key Details</span>
+            <p className="text-xs text-slate-700 dark:text-slate-300 leading-relaxed">
+              {session.key_details}
+            </p>
+          </div>
+        )}
+        {(session.agent_confidence || session.user_confidence) && (
+          <div className="flex flex-wrap gap-1.5">
+            {session.agent_confidence && (
+              <ConfidenceBadge label="AI" level={session.agent_confidence} />
+            )}
+            {session.user_confidence && (
+              <ConfidenceBadge label="User" level={session.user_confidence} />
+            )}
+          </div>
+        )}
+      </div>
+    ) : null;
 
   const takeoverSection = live ? (
     <div className="flex flex-col gap-2">
@@ -1103,11 +1051,13 @@ function DetailPanel({
 
       {isOthersClaim && (
         <span className="inline-flex items-center gap-1.5 px-3 py-2 rounded-lg bg-slate-100 dark:bg-slate-700 text-slate-600 dark:text-slate-300 text-xs font-medium">
-          <svg viewBox="0 0 16 16" className="w-3.5 h-3.5 fill-current shrink-0">
+          <svg
+            viewBox="0 0 16 16"
+            className="w-3.5 h-3.5 fill-current shrink-0"
+          >
             <path d="M8 8a3 3 0 1 0 0-6 3 3 0 0 0 0 6ZM12.735 14c.618 0 1.093-.561.872-1.139a6.002 6.002 0 0 0-11.215 0c-.22.578.254 1.139.872 1.139h9.47Z" />
           </svg>
-          Claimed by{" "}
-          <span className="font-semibold">{session.claimed_by}</span>
+          Claimed by <span className="font-semibold">{session.claimed_by}</span>
         </span>
       )}
 
@@ -1121,67 +1071,72 @@ function DetailPanel({
           </span>
 
           {audioError && (
-            <p className="text-xs text-red-500 dark:text-red-400">{audioError}</p>
+            <p className="text-xs text-red-500 dark:text-red-400">
+              {audioError}
+            </p>
           )}
 
           {audioConnected && (
-            <button
-              onMouseDown={() => sendVad(true)}
-              onMouseUp={() => sendVad(false)}
-              onMouseLeave={() => { if (speaking) sendVad(false); }}
-              onTouchStart={(e) => { e.preventDefault(); sendVad(true); }}
-              onTouchEnd={(e) => { e.preventDefault(); sendVad(false); }}
-              className={`px-4 py-3 rounded-lg font-semibold text-sm transition-all select-none ${
-                speaking
-                  ? "bg-red-500 text-white shadow-md scale-95"
-                  : "bg-slate-200 dark:bg-slate-700 text-slate-700 dark:text-slate-200 hover:bg-slate-300 dark:hover:bg-slate-600"
-              }`}
-            >
-              {speaking ? "🎤 Speaking…" : "Hold to Speak"}
-            </button>
+            <div className="flex items-center gap-3">
+              <button
+                onClick={() => audioToggleMute()}
+                aria-label={audioMuted ? "Unmute" : "Mute"}
+                className={`flex items-center gap-2 px-4 py-2 rounded-lg font-semibold text-sm transition-all active:scale-95 ${
+                  audioMuted
+                    ? "bg-slate-700 hover:bg-slate-800 text-white"
+                    : "bg-slate-200 dark:bg-slate-600 hover:bg-slate-300 dark:hover:bg-slate-500 text-slate-700 dark:text-white"
+                }`}
+              >
+                {audioMuted ? <MutedIcon /> : <MicIcon />}
+                {audioMuted ? "Unmute" : "Mute"}
+              </button>
+              <TakeoverSpeakerBadge speaker={audioSpeaker} />
+            </div>
           )}
         </div>
       )}
     </div>
   ) : null;
 
-  const recordingSection = !live && (session.audio_mixed_url || session.audio_url) ? (
-    <div className="flex flex-col gap-1.5">
-      <span className="text-xs font-semibold text-slate-400 uppercase tracking-wide">
-        Recording
-      </span>
-      <audio
-        controls
-        src={session.audio_mixed_url ?? session.audio_url ?? undefined}
-        className="w-full rounded-lg"
-      />
-      {session.audio_mixed_url && session.audio_url && (
-        <a
-          href={session.audio_url}
-          target="_blank"
-          rel="noreferrer"
-          className="text-xs text-slate-400 hover:text-slate-600 dark:hover:text-slate-300 underline"
-        >
-          Caller-only audio
-        </a>
-      )}
-    </div>
-  ) : null;
+  const recordingSection =
+    !live && (session.audio_mixed_url || session.audio_url) ? (
+      <div className="flex flex-col gap-1.5">
+        <span className="text-xs font-semibold text-slate-400 uppercase tracking-wide">
+          Recording
+        </span>
+        <audio
+          controls
+          src={session.audio_mixed_url ?? session.audio_url ?? undefined}
+          className="w-full rounded-lg"
+        />
+        {session.audio_mixed_url && session.audio_url && (
+          <a
+            href={session.audio_url}
+            target="_blank"
+            rel="noreferrer"
+            className="text-xs text-slate-400 hover:text-slate-600 dark:hover:text-slate-300 underline"
+          >
+            Caller-only audio
+          </a>
+        )}
+      </div>
+    ) : null;
 
-  const lastUpdatedSection = live && session.timestamp ? (
-    <div className="flex flex-col gap-0.5">
-      <span className="text-xs font-semibold text-slate-400 uppercase tracking-wide">
-        Last Updated
-      </span>
-      <span className="text-xs font-mono text-slate-500 dark:text-slate-400">
-        {new Date(session.timestamp).toLocaleTimeString(undefined, {
-          hour: "2-digit",
-          minute: "2-digit",
-          second: "2-digit",
-        })}
-      </span>
-    </div>
-  ) : null;
+  const lastUpdatedSection =
+    live && session.timestamp ? (
+      <div className="flex flex-col gap-0.5">
+        <span className="text-xs font-semibold text-slate-400 uppercase tracking-wide">
+          Last Updated
+        </span>
+        <span className="text-xs font-mono text-slate-500 dark:text-slate-400">
+          {new Date(session.timestamp).toLocaleTimeString(undefined, {
+            hour: "2-digit",
+            minute: "2-digit",
+            second: "2-digit",
+          })}
+        </span>
+      </div>
+    ) : null;
 
   return (
     <div className="p-4 flex flex-col gap-4 min-w-0">
@@ -1302,14 +1257,24 @@ function UrgencyBadge({ urgency }: { urgency: Urgency }) {
   );
 }
 
-function ConfidenceBadge({ label, level }: { label: string; level: "GREEN" | "YELLOW" | "RED" }) {
+function ConfidenceBadge({
+  label,
+  level,
+}: {
+  label: string;
+  level: "GREEN" | "YELLOW" | "RED";
+}) {
   const styles: Record<"GREEN" | "YELLOW" | "RED", string> = {
-    GREEN: "bg-green-100 text-green-700 dark:bg-green-900/50 dark:text-green-300",
-    YELLOW: "bg-amber-100 text-amber-700 dark:bg-amber-900/50 dark:text-amber-300",
+    GREEN:
+      "bg-green-100 text-green-700 dark:bg-green-900/50 dark:text-green-300",
+    YELLOW:
+      "bg-amber-100 text-amber-700 dark:bg-amber-900/50 dark:text-amber-300",
     RED: "bg-red-100 text-red-700 dark:bg-red-900/50 dark:text-red-300",
   };
   return (
-    <span className={`text-xs px-2 py-0.5 rounded-full font-semibold ${styles[level]}`}>
+    <span
+      className={`text-xs px-2 py-0.5 rounded-full font-semibold ${styles[level]}`}
+    >
       {label} confidence: {level}
     </span>
   );
@@ -1328,7 +1293,8 @@ function QueryTypeBadge({
       label: "Emergency",
     },
     MUNICIPALITY: {
-      badge: "bg-amber-100 text-amber-700 dark:bg-amber-900/50 dark:text-amber-300",
+      badge:
+        "bg-amber-100 text-amber-700 dark:bg-amber-900/50 dark:text-amber-300",
       label: "Municipality",
     },
     GENERAL: {
@@ -1347,12 +1313,17 @@ function QueryTypeBadge({
   const qt = session.query_type;
   if (!qt) return null;
 
-  const { badge, label } = qtStyles[qt] ?? { badge: "bg-slate-100 text-slate-600 dark:bg-slate-700 dark:text-slate-300", label: qt };
+  const { badge, label } = qtStyles[qt] ?? {
+    badge: "bg-slate-100 text-slate-600 dark:bg-slate-700 dark:text-slate-300",
+    label: qt,
+  };
 
   return (
     <div className={`flex flex-col gap-1 ${compact ? "" : ""}`}>
       <div className="flex flex-wrap items-center gap-1.5">
-        <span className={`text-xs px-2 py-0.5 rounded-full font-semibold ${badge}`}>
+        <span
+          className={`text-xs px-2 py-0.5 rounded-full font-semibold ${badge}`}
+        >
           {label}
         </span>
         {qt === "EMERGENCY" && session.service_type && (
@@ -1362,7 +1333,9 @@ function QueryTypeBadge({
         )}
       </div>
       {session.location && (
-        <p className={`text-xs text-slate-500 dark:text-slate-400 ${compact ? "truncate" : ""}`}>
+        <p
+          className={`text-xs text-slate-500 dark:text-slate-400 ${compact ? "truncate" : ""}`}
+        >
           📍 {session.location}
         </p>
       )}
@@ -1417,6 +1390,57 @@ function WsStatusBadge({
           Retry
         </button>
       )}
+    </span>
+  );
+}
+
+// --- Takeover audio icons and speaker badge ---
+
+function MicIcon() {
+  return (
+    <svg viewBox="0 0 24 24" className="w-4 h-4 fill-current shrink-0">
+      <path d="M12 1a4 4 0 0 1 4 4v6a4 4 0 0 1-8 0V5a4 4 0 0 1 4-4zm-1.5 17.93A8.001 8.001 0 0 1 4 11H2a10 10 0 0 0 9 9.95V23h2v-2.05A10 10 0 0 0 22 11h-2a8 8 0 0 1-6.5 7.93V19h-3v-0.07z" />
+    </svg>
+  );
+}
+
+function MutedIcon() {
+  return (
+    <svg viewBox="0 0 24 24" className="w-4 h-4 fill-current shrink-0">
+      <path d="M3.71 2.29a1 1 0 0 0-1.42 1.42l18 18a1 1 0 0 0 1.42-1.42l-18-18zM12 1a4 4 0 0 1 4 4v.18l-8 8V5a4 4 0 0 1 4-4zm4 12.46A4 4 0 0 1 8 11V9.46l8 8zM4 11H2a10 10 0 0 0 9 9.95V23h2v-2.05A10 10 0 0 0 22 11h-2a8 8 0 0 1-14.27 3.7L4 11z" />
+    </svg>
+  );
+}
+
+// Admin takeover labels: outgoing mic activity = "Human Agent" (you), incoming audio = "User" (the caller)
+function TakeoverSpeakerBadge({ speaker }: { speaker: SpeakerState }) {
+  useEffect(() => {
+    console.log("Speaker state changed:", speaker);
+  }, [speaker]);
+
+  if (speaker === "silent") return null;
+  const styles: Record<
+    Exclude<SpeakerState, "silent">,
+    { label: string; cls: string; dot: string }
+  > = {
+    outgoing: {
+      label: "Human Agent",
+      cls: "bg-indigo-100 text-indigo-700 dark:bg-indigo-900/50 dark:text-indigo-300",
+      dot: "bg-indigo-500",
+    },
+    incoming: {
+      label: "User",
+      cls: "bg-blue-100 text-blue-700 dark:bg-blue-900/50 dark:text-blue-300",
+      dot: "bg-blue-500",
+    },
+  };
+  const { label, cls, dot } = styles[speaker];
+  return (
+    <span
+      className={`inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full text-xs font-semibold ${cls}`}
+    >
+      <span className={`w-1.5 h-1.5 rounded-full animate-pulse ${dot}`} />
+      {label}
     </span>
   );
 }

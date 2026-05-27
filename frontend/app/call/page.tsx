@@ -1,275 +1,39 @@
 "use client";
 
-import { useRef, useState, useCallback, useEffect } from "react";
+import { useState, useCallback } from "react";
 import Link from "next/link";
 
-type CallStatus = "idle" | "connecting" | "active" | "disconnected";
-type Speaker = "silent" | "user" | "agent";
-
 import { WS_BASE } from "@/lib/config";
-
-// Average magnitude of voice-band frequency bins (85–3000 Hz) below this is silence.
-const VAD_SILENCE_THRESHOLD = 100;
-// How long audio must stay below threshold before the state flips to silent.
-const VAD_SILENCE_DEBOUNCE_MS = 400;
-const TTS_SAMPLE_RATE = 16000; // bulbul:v3 PCM output rate
-
-function voiceBandAvg(bins: Uint8Array, sampleRate: number, fftSize: number): number {
-  const binHz = sampleRate / fftSize;
-  let sum = 0, count = 0;
-  for (let i = 0; i < bins.length; i++) {
-    const freq = i * binHz;
-    if (freq >= 85 && freq <= 255) { sum += bins[i]; count++; }
-  }
-  return count > 0 ? sum / count : 0;
-}
+import { useAudioStream } from "@/lib/hooks/useAudioStream";
+import type { SpeakerState } from "@/lib/hooks/useAudioStream";
 
 export default function CallPage() {
-  const [status, setStatus] = useState<CallStatus>("idle");
   const [sessionId, setSessionId] = useState<string | null>(null);
   const [logs, setLogs] = useState<string[]>([]);
-  const [speaker, setSpeaker] = useState<Speaker>("silent");
-
-  const [muted, setMuted] = useState(false);
-  const muteRef = useRef(false);
-
-  const wsRef = useRef<WebSocket | null>(null);
-  const processorRef = useRef<AudioWorkletNode | null>(null);
-  const streamRef = useRef<MediaStream | null>(null);
-  const audioCtxRef = useRef<AudioContext | null>(null);
-  const closingRef = useRef(false);
-  const prevSpeakingRef = useRef(false);
-  const agentPlayingRef = useRef(false);
-  const silenceTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
-  const nextPlayTimeRef = useRef(0);
-  const activeSourcesRef = useRef<Set<AudioBufferSourceNode>>(new Set());
-  const muteGainRef = useRef<GainNode | null>(null);
 
   const addLog = useCallback((msg: string) => {
     const time = new Date().toLocaleTimeString();
     setLogs((prev) => [`[${time}] ${msg}`, ...prev].slice(0, 100));
   }, []);
 
-  const cleanup = useCallback(() => {
-    processorRef.current?.disconnect();
-    processorRef.current = null;
-    muteGainRef.current?.disconnect();
-    muteGainRef.current = null;
-    streamRef.current?.getTracks().forEach((t) => t.stop());
-    streamRef.current = null;
-  }, []);
-
-  const stopCall = useCallback(() => {
-    closingRef.current = true;
-    if (silenceTimerRef.current) {
-      clearTimeout(silenceTimerRef.current);
-      silenceTimerRef.current = null;
-    }
-    cleanup();
-    wsRef.current?.close();
-    wsRef.current = null;
-    setStatus("disconnected");
-    setSpeaker("silent");
-    addLog("Call ended.");
-  }, [addLog, cleanup]);
-
-  const stopAgentAudio = useCallback(() => {
-    for (const src of activeSourcesRef.current) {
-      try { src.stop(); } catch {}
-    }
-    activeSourcesRef.current.clear();
-    nextPlayTimeRef.current = 0;
-    agentPlayingRef.current = false;
-  }, []);
-
-  const playPcmChunk = useCallback((data: ArrayBuffer) => {
-    try {
-      const ctx = audioCtxRef.current;
-      if (!ctx || ctx.state === "closed") return;
-
-      const int16 = new Int16Array(data);
-      const float32 = new Float32Array(int16.length);
-      for (let i = 0; i < int16.length; i++) {
-        float32[i] = int16[i] / 32768;
-      }
-
-      const buffer = ctx.createBuffer(1, float32.length, TTS_SAMPLE_RATE);
-      buffer.copyToChannel(float32, 0);
-
-      const source = ctx.createBufferSource();
-      source.buffer = buffer;
-      source.connect(ctx.destination);
-
-      const startTime = Math.max(ctx.currentTime, nextPlayTimeRef.current);
-      source.start(startTime);
-      nextPlayTimeRef.current = startTime + buffer.duration;
-
-      activeSourcesRef.current.add(source);
-      if (!agentPlayingRef.current) {
-        agentPlayingRef.current = true;
-        setSpeaker("agent");
-      }
-
-      source.onended = () => {
-        activeSourcesRef.current.delete(source);
-        if (nextPlayTimeRef.current <= ctx.currentTime + 0.05) {
-          agentPlayingRef.current = false;
-          setSpeaker(prevSpeakingRef.current ? "user" : "silent");
+  const { status, speaker, muted, connect, disconnect, toggleMute } =
+    useAudioStream({
+      enableMute: true,
+      enableBargeIn: true,
+      ttsLookaheadSeconds: 0.05,
+      onServerMessage: (msg) => {
+        if (msg.type === "metadata" && typeof msg.session_id === "string") {
+          setSessionId(msg.session_id);
+          addLog(`Session ID: ${msg.session_id}`);
         }
-      };
-    } catch (err) {
-      addLog(`PCM playback error: ${err}`);
-    }
-  }, [addLog]);
-
-  const startCall = useCallback(async () => {
-    closingRef.current = false;
-    prevSpeakingRef.current = false;
-    agentPlayingRef.current = false;
-    nextPlayTimeRef.current = 0;
-    activeSourcesRef.current.clear();
-    if (silenceTimerRef.current) {
-      clearTimeout(silenceTimerRef.current);
-      silenceTimerRef.current = null;
-    }
-    setStatus("connecting");
-    setSpeaker("silent");
-    setSessionId(null);
-    setLogs([]);
-    addLog("Requesting microphone access...");
-
-    let stream: MediaStream;
-    try {
-      stream = await navigator.mediaDevices.getUserMedia({
-        audio: true,
-        video: false,
-      });
-      streamRef.current = stream;
-    } catch {
-      addLog("Microphone access denied.");
-      setStatus("idle");
-      return;
-    }
-
-    addLog("Connecting to server...");
-    const ws = new WebSocket(`${WS_BASE}/call`);
-    ws.binaryType = "arraybuffer";
-    wsRef.current = ws;
-
-    ws.onopen = () => {
-      void (async () => {
-        setStatus("active");
-        addLog("Connected.");
-
-        const ctx = new AudioContext({ sampleRate: 16000 });
-        audioCtxRef.current = ctx;
-
-        try {
-          await ctx.audioWorklet.addModule("/audio-processor.worklet.js");
-        } catch {
-          addLog("Failed to load audio worklet.");
-          setStatus("disconnected");
-          return;
-        }
-
-        const micSource = ctx.createMediaStreamSource(stream);
-
-        // Mute gate: gain=0 when muted, gain=1 otherwise.
-        // Zeroes the signal before it reaches the analyser or worklet,
-        // so VAD, encoding, and WS send are all unaware of mute.
-        const muteGain = ctx.createGain();
-        muteGain.gain.value = muteRef.current ? 0 : 1;
-        muteGainRef.current = muteGain;
-        micSource.connect(muteGain);
-
-        const analyser = ctx.createAnalyser();
-        analyser.fftSize = 512;
-        muteGain.connect(analyser);
-        const freqBins = new Uint8Array(analyser.frequencyBinCount);
-
-        const worklet = new AudioWorkletNode(ctx, "audio-processor");
-        processorRef.current = worklet;
-
-        worklet.port.onmessage = (e) => {
-          if (ws.readyState !== WebSocket.OPEN) return;
-
-          const float32: Float32Array = e.data;
-          const int16 = new Int16Array(float32.length);
-          for (let i = 0; i < float32.length; i++) {
-            int16[i] = Math.max(-32768, Math.min(32767, float32[i] * 32767));
-          }
-          ws.send(int16.buffer);
-
-          analyser.getByteFrequencyData(freqBins);
-          const avg = voiceBandAvg(freqBins, ctx.sampleRate, analyser.fftSize);
-          const speaking = avg > VAD_SILENCE_THRESHOLD;
-          ws.send(JSON.stringify({ type: "vad", speaking }));
-
-          if (speaking) {
-            if (silenceTimerRef.current) {
-              clearTimeout(silenceTimerRef.current);
-              silenceTimerRef.current = null;
-            }
-            if (!prevSpeakingRef.current) {
-              prevSpeakingRef.current = true;
-              if (agentPlayingRef.current) {
-                stopAgentAudio();
-              } else {
-                setSpeaker("user");
-              }
-            }
-          } else if (prevSpeakingRef.current && !silenceTimerRef.current) {
-            silenceTimerRef.current = setTimeout(() => {
-              silenceTimerRef.current = null;
-              prevSpeakingRef.current = false;
-              if (!agentPlayingRef.current) setSpeaker("silent");
-            }, VAD_SILENCE_DEBOUNCE_MS);
-          }
-        };
-
-        muteGain.connect(worklet);
-      })();
-    };
-
-    ws.onmessage = (e) => {
-      if (typeof e.data === "string") {
-        try {
-          const msg = JSON.parse(e.data) as Record<string, unknown>;
-          if (msg.type === "metadata" && typeof msg.session_id === "string") {
-            setSessionId(msg.session_id);
-            addLog(`Session ID: ${msg.session_id}`);
-          }
-        } catch {
-          addLog(`Server message: ${e.data}`);
-        }
-      } else if (e.data instanceof ArrayBuffer) {
-        playPcmChunk(e.data);
-      }
-    };
-
-    ws.onerror = () => addLog("WebSocket error.");
-
-    ws.onclose = () => {
-      cleanup();
-      if (!closingRef.current) {
-        addLog("Disconnected from server.");
-        setStatus("disconnected");
-      }
-    };
-  }, [addLog, cleanup, playPcmChunk, stopAgentAudio]);
-
-  useEffect(() => {
-    return () => {
-      closingRef.current = true;
-      if (silenceTimerRef.current) clearTimeout(silenceTimerRef.current);
-      cleanup();
-      wsRef.current?.close();
-      audioCtxRef.current?.close();
-    };
-  }, [cleanup]);
+      },
+      onLog: addLog,
+    });
 
   const isActive = status === "active";
   const isConnecting = status === "connecting";
+  // Treat 'error' the same as 'disconnected' for button state
+  const isDisabled = isConnecting;
 
   return (
     <div className="min-h-screen flex flex-col items-center justify-center bg-linear-to-br from-blue-50 to-indigo-100 dark:from-slate-900 dark:to-slate-800 p-4">
@@ -315,8 +79,8 @@ export default function CallPage() {
           <div className="flex flex-col items-center gap-3 py-4">
             <div className="flex items-center gap-6">
               <button
-                onClick={isActive ? stopCall : startCall}
-                disabled={isConnecting}
+                onClick={isActive ? disconnect : () => connect(`${WS_BASE}/call`)}
+                disabled={isDisabled}
                 aria-label={isActive ? "End call" : "Start call"}
                 className={`w-24 h-24 rounded-full flex items-center justify-center shadow-lg transition-all active:scale-95 disabled:opacity-50 disabled:cursor-not-allowed text-white ${
                   isActive
@@ -335,13 +99,7 @@ export default function CallPage() {
 
               {isActive && (
                 <button
-                  onClick={() => {
-                    muteRef.current = !muteRef.current;
-                    setMuted(muteRef.current);
-                    if (muteGainRef.current) {
-                      muteGainRef.current.gain.value = muteRef.current ? 0 : 1;
-                    }
-                  }}
+                  onClick={() => toggleMute()}
                   aria-label={muted ? "Unmute" : "Mute"}
                   className={`w-14 h-14 rounded-full flex items-center justify-center shadow-md transition-all active:scale-95 ${
                     muted
@@ -399,40 +157,43 @@ export default function CallPage() {
   );
 }
 
-function SpeakerBadge({ speaker }: { speaker: Speaker }) {
-  const styles: Record<Speaker, { label: string; cls: string }> = {
+// ---------------------------------------------------------------------------
+// Badge sub-components
+// ---------------------------------------------------------------------------
+
+// Call page labels: outgoing mic activity = "USER", incoming TTS = "AGENT"
+function SpeakerBadge({ speaker }: { speaker: SpeakerState }) {
+  const styles: Record<SpeakerState, { label: string; cls: string; dot?: string }> = {
     silent: {
       label: "SILENT",
       cls: "bg-slate-100 text-slate-500 dark:bg-slate-700 dark:text-slate-400",
     },
-    user: {
+    outgoing: {
       label: "USER",
       cls: "bg-blue-100 text-blue-700 dark:bg-blue-900 dark:text-blue-300",
+      dot: "bg-blue-500",
     },
-    agent: {
+    incoming: {
       label: "AGENT",
       cls: "bg-purple-100 text-purple-700 dark:bg-purple-900 dark:text-purple-300",
+      dot: "bg-purple-500",
     },
   };
-  const { label, cls } = styles[speaker];
+  const { label, cls, dot } = styles[speaker];
   return (
     <span
       className={`inline-flex items-center gap-1.5 px-3 py-1 rounded-full text-xs font-bold tracking-wide ${cls}`}
     >
-      {speaker !== "silent" && (
-        <span
-          className={`w-2 h-2 rounded-full animate-pulse ${
-            speaker === "user" ? "bg-blue-500" : "bg-purple-500"
-          }`}
-        />
-      )}
+      {dot && <span className={`w-2 h-2 rounded-full animate-pulse ${dot}`} />}
       {label}
     </span>
   );
 }
 
-function StatusBadge({ status }: { status: CallStatus }) {
-  const styles: Record<CallStatus, { label: string; cls: string }> = {
+type CallStatusType = "idle" | "connecting" | "active" | "disconnected" | "error";
+
+function StatusBadge({ status }: { status: CallStatusType }) {
+  const styles: Record<CallStatusType, { label: string; cls: string }> = {
     idle: {
       label: "Idle",
       cls: "bg-slate-100 text-slate-600 dark:bg-slate-700 dark:text-slate-300",
@@ -449,6 +210,10 @@ function StatusBadge({ status }: { status: CallStatus }) {
       label: "Disconnected",
       cls: "bg-red-100 text-red-700 dark:bg-red-900 dark:text-red-300",
     },
+    error: {
+      label: "Error",
+      cls: "bg-red-100 text-red-700 dark:bg-red-900 dark:text-red-300",
+    },
   };
   const { label, cls } = styles[status];
   return (
@@ -462,6 +227,10 @@ function StatusBadge({ status }: { status: CallStatus }) {
     </span>
   );
 }
+
+// ---------------------------------------------------------------------------
+// Icon sub-components
+// ---------------------------------------------------------------------------
 
 function PhoneIcon() {
   return (
