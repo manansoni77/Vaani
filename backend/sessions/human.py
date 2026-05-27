@@ -76,12 +76,13 @@ class HumanAgentSession:
                     break
                 if msg.get("bytes"):
                     chunk = msg["bytes"]
-                    self.log.debug(f"forwarding audio chunk: {len(chunk)} bytes")
-                    try:
-                        await self.call_session.websocket.send_bytes(chunk)
-                    except Exception as e:
-                        self.log.warning(f"failed to forward audio to caller: {e!r}")
-                    self._audio_queue.put_nowait(chunk)
+                    if self._speaking:
+                        self.log.debug(f"forwarding audio chunk: {len(chunk)} bytes")
+                        try:
+                            await self.call_session.websocket.send_bytes(chunk)
+                        except Exception as e:
+                            self.log.warning(f"failed to forward audio to caller: {e!r}")
+                        self._audio_queue.put_nowait(chunk)
                 elif msg.get("text"):
                     await self._handle_vad(msg["text"])
         except WebSocketDisconnect:
