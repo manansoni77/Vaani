@@ -9,6 +9,13 @@ import { useRef, useState, useEffect, useCallback } from "react";
 const VAD_SILENCE_THRESHOLD = 100; // avg magnitude of voice-band bins below this = silence
 const VAD_SILENCE_DEBOUNCE_MS = 400; // ms user must be silent before state flips
 const TTS_SAMPLE_RATE = 16000; // PCM sample rate for both mic send and TTS receive (bulbul:v3)
+/**
+ * Minimum average absolute Int16 magnitude (0–32767) for an incoming PCM
+ * chunk to count as "voice".  Muted senders produce true zeros; a speaking
+ * caller typically reaches thousands.  300 is well above quantisation noise
+ * but low enough to catch soft speech.
+ */
+const INCOMING_VAD_THRESHOLD = 300;
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -162,14 +169,20 @@ export function useAudioStream(options: UseAudioStreamOptions): UseAudioStreamRe
   const analyserRef = useRef<AnalyserNode | null>(null);
   const freqBinsRef = useRef<Uint8Array<ArrayBuffer> | null>(null);
 
-  // TTS playback
+  // TTS / incoming-audio playback
   const nextPlayTimeRef = useRef<number>(0);
   const activeSourcesRef = useRef<Set<AudioBufferSourceNode>>(new Set());
   const agentPlayingRef = useRef(false);
 
-  // Auto-VAD state
+  // Outgoing VAD state (local mic)
   const prevSpeakingRef = useRef(false);
   const silenceTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+
+  // Incoming VAD state (remote party) — mirrors the outgoing VAD debounce
+  // so that a muted caller whose PCM frames contain only zeros eventually
+  // transitions the badge to "silent" instead of staying on "incoming".
+  const prevIncomingVoiceRef = useRef(false);
+  const incomingSilenceTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   // Lifecycle
   const closingRef = useRef(false);
@@ -200,6 +213,12 @@ export function useAudioStream(options: UseAudioStreamOptions): UseAudioStreamRe
     activeSourcesRef.current.clear();
     nextPlayTimeRef.current = 0;
     agentPlayingRef.current = false;
+    // Clear incoming-voice debounce so barge-in doesn't leave a stale timer.
+    if (incomingSilenceTimerRef.current) {
+      clearTimeout(incomingSilenceTimerRef.current);
+      incomingSilenceTimerRef.current = null;
+    }
+    prevIncomingVoiceRef.current = false;
   }, []);
 
   // ------------------------------------------------------------------
@@ -213,9 +232,17 @@ export function useAudioStream(options: UseAudioStreamOptions): UseAudioStreamRe
 
     const int16 = new Int16Array(data);
     const float32 = new Float32Array(int16.length);
+
+    // Measure average absolute amplitude to distinguish real voice from the
+    // silence frames a muted caller still sends (zeros from their GainNode).
+    let magnitudeSum = 0;
     for (let i = 0; i < int16.length; i++) {
       float32[i] = int16[i] / 32768;
+      magnitudeSum += Math.abs(int16[i]);
     }
+    const hasIncomingVoice =
+      int16.length > 0 &&
+      magnitudeSum / int16.length > INCOMING_VAD_THRESHOLD;
 
     const buffer = ctx.createBuffer(1, float32.length, TTS_SAMPLE_RATE);
     buffer.copyToChannel(float32, 0);
@@ -235,9 +262,32 @@ export function useAudioStream(options: UseAudioStreamOptions): UseAudioStreamRe
       activeSourcesRef.current.add(source);
     }
 
-    if (!agentPlayingRef.current) {
-      agentPlayingRef.current = true;
-      setSpeaker("incoming");
+    agentPlayingRef.current = true;
+
+    // ---- Incoming VAD debounce (mirrors the outgoing-mic VAD logic) ----
+    if (hasIncomingVoice) {
+      // Remote party is speaking — cancel any pending silence debounce.
+      if (incomingSilenceTimerRef.current) {
+        clearTimeout(incomingSilenceTimerRef.current);
+        incomingSilenceTimerRef.current = null;
+      }
+      if (!prevIncomingVoiceRef.current) {
+        prevIncomingVoiceRef.current = true;
+        // Only flip badge to "incoming" when local mic is also quiet.
+        if (!prevSpeakingRef.current) {
+          setSpeaker("incoming");
+        }
+      }
+    } else if (prevIncomingVoiceRef.current && !incomingSilenceTimerRef.current) {
+      // Remote party just went silent — debounce before declaring silence,
+      // matching the 400 ms debounce used for the outgoing VAD.
+      incomingSilenceTimerRef.current = setTimeout(() => {
+        incomingSilenceTimerRef.current = null;
+        prevIncomingVoiceRef.current = false;
+        if (!prevSpeakingRef.current) {
+          setSpeaker("silent");
+        }
+      }, VAD_SILENCE_DEBOUNCE_MS);
     }
 
     source.onended = () => {
@@ -247,6 +297,13 @@ export function useAudioStream(options: UseAudioStreamOptions): UseAudioStreamRe
       // If no more audio is scheduled within 50ms, consider playback done.
       if (nextPlayTimeRef.current <= ctx.currentTime + 0.05) {
         agentPlayingRef.current = false;
+        // Audio fully drained — also clear the incoming voice state so it
+        // doesn't keep the badge on "incoming" after playback stops.
+        prevIncomingVoiceRef.current = false;
+        if (incomingSilenceTimerRef.current) {
+          clearTimeout(incomingSilenceTimerRef.current);
+          incomingSilenceTimerRef.current = null;
+        }
         setSpeaker(prevSpeakingRef.current ? "outgoing" : "silent");
       }
     };
@@ -281,6 +338,11 @@ export function useAudioStream(options: UseAudioStreamOptions): UseAudioStreamRe
       activeSourcesRef.current.clear();
       agentPlayingRef.current = false;
       prevSpeakingRef.current = false;
+      prevIncomingVoiceRef.current = false;
+      if (incomingSilenceTimerRef.current) {
+        clearTimeout(incomingSilenceTimerRef.current);
+        incomingSilenceTimerRef.current = null;
+      }
       muteRef.current = false;
 
       setStatus("connecting");
@@ -290,21 +352,15 @@ export function useAudioStream(options: UseAudioStreamOptions): UseAudioStreamRe
       // Kick off the async setup in a void-wrapped IIFE so connect()
       // stays synchronous (no returned promise to the caller).
       void (async () => {
-        // 1. Microphone access
-        let stream: MediaStream;
-        try {
-          stream = await navigator.mediaDevices.getUserMedia({
-            audio: true,
-            video: false,
-          });
-          streamRef.current = stream;
-        } catch {
-          onLogRef.current?.("Microphone access denied.");
-          setStatus("error");
-          return;
-        }
+        // 1. Start getUserMedia as a promise — do NOT await yet.
+        //    Opening the WebSocket in parallel means the server can start
+        //    forwarding audio the moment the connection is established, rather
+        //    than waiting for mic-permission to resolve first.
+        const streamPromise = navigator.mediaDevices
+          .getUserMedia({ audio: true, video: false })
+          .catch(() => null as MediaStream | null);
 
-        // 2. Open WebSocket
+        // 2. Open WebSocket immediately.
         const ws = new WebSocket(url);
         ws.binaryType = "arraybuffer";
         wsRef.current = ws;
@@ -345,10 +401,8 @@ export function useAudioStream(options: UseAudioStreamOptions): UseAudioStreamRe
               return;
             }
 
-            setStatus("active");
-            onLogRef.current?.("Connected.");
-
-            // AudioContext
+            // Create AudioContext before any await so that playPcmChunk can
+            // play incoming binary frames as soon as the first one arrives.
             const ctx = new AudioContext({ sampleRate: TTS_SAMPLE_RATE });
             audioCtxRef.current = ctx;
             ctx.resume().catch(() => {});
@@ -371,12 +425,37 @@ export function useAudioStream(options: UseAudioStreamOptions): UseAudioStreamRe
               return;
             }
 
-            // Check again — component may have unmounted during async load.
             if (closingRef.current) {
               ws.close();
               ctx.close().catch(() => {});
               return;
             }
+
+            // Mark active now — incoming audio pipeline (AudioContext + worklet)
+            // is ready even before the microphone is connected.
+            setStatus("active");
+            onLogRef.current?.("Connected.");
+
+            // 5. Await getUserMedia — it was started in parallel so it has
+            //    likely already resolved by the time we get here.
+            const stream = await streamPromise;
+            if (!stream) {
+              onLogRef.current?.("Microphone access denied.");
+              setStatus("error");
+              ws.close();
+              ctx.close().catch(() => {});
+              return;
+            }
+
+            if (closingRef.current) {
+              // Discard mic if we were asked to disconnect while awaiting.
+              stream.getTracks().forEach((t) => t.stop());
+              ws.close();
+              ctx.close().catch(() => {});
+              return;
+            }
+
+            streamRef.current = stream;
 
             // Build the audio graph:
             //   With mute:    micSource → GainNode ─┬─► AnalyserNode
@@ -388,7 +467,9 @@ export function useAudioStream(options: UseAudioStreamOptions): UseAudioStreamRe
 
             if (enableMute) {
               const muteGain = ctx.createGain();
-              muteGain.gain.value = 1; // not muted initially
+              // Honour mute state that may have been set while getUserMedia
+              // was still pending (e.g. admin clicked Mute before mic granted).
+              muteGain.gain.value = muteRef.current ? 0 : 1;
               muteGainRef.current = muteGain;
               micSource.connect(muteGain);
               upstream = muteGain;
@@ -442,7 +523,12 @@ export function useAudioStream(options: UseAudioStreamOptions): UseAudioStreamRe
                 silenceTimerRef.current = setTimeout(() => {
                   silenceTimerRef.current = null;
                   prevSpeakingRef.current = false;
-                  if (!agentPlayingRef.current) setSpeaker("silent");
+                  // Always update the badge when the local mic goes silent.
+                  // Use the debounced incoming-voice state: if the remote party
+                  // is actively speaking, show "incoming"; otherwise "silent".
+                  // (Using prevIncomingVoiceRef rather than a raw energy check
+                  // prevents single-chunk glitches from flipping the badge.)
+                  setSpeaker(prevIncomingVoiceRef.current ? "incoming" : "silent");
                 }, VAD_SILENCE_DEBOUNCE_MS);
               }
             };
@@ -461,6 +547,10 @@ export function useAudioStream(options: UseAudioStreamOptions): UseAudioStreamRe
     if (silenceTimerRef.current) {
       clearTimeout(silenceTimerRef.current);
       silenceTimerRef.current = null;
+    }
+    if (incomingSilenceTimerRef.current) {
+      clearTimeout(incomingSilenceTimerRef.current);
+      incomingSilenceTimerRef.current = null;
     }
     teardownAudioGraph();
     wsRef.current?.close();
@@ -493,6 +583,9 @@ export function useAudioStream(options: UseAudioStreamOptions): UseAudioStreamRe
       closingRef.current = true;
       if (silenceTimerRef.current) {
         clearTimeout(silenceTimerRef.current);
+      }
+      if (incomingSilenceTimerRef.current) {
+        clearTimeout(incomingSilenceTimerRef.current);
       }
       teardownAudioGraph();
       wsRef.current?.close();
