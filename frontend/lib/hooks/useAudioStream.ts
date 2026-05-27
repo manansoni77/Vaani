@@ -2,20 +2,12 @@
 
 import { useRef, useState, useEffect, useCallback } from "react";
 
-// ---------------------------------------------------------------------------
-// Constants
-// ---------------------------------------------------------------------------
-
-const VAD_SILENCE_THRESHOLD = 100; // avg magnitude of voice-band bins below this = silence
-const VAD_SILENCE_DEBOUNCE_MS = 400; // ms user must be silent before state flips
-const TTS_SAMPLE_RATE = 16000; // PCM sample rate for both mic send and TTS receive (bulbul:v3)
-/**
- * Minimum average absolute Int16 magnitude (0–32767) for an incoming PCM
- * chunk to count as "voice".  Muted senders produce true zeros; a speaking
- * caller typically reaches thousands.  300 is well above quantisation noise
- * but low enough to catch soft speech.
- */
-const INCOMING_VAD_THRESHOLD = 300;
+import {
+  VAD_SILENCE_THRESHOLD,
+  VAD_SILENCE_DEBOUNCE_MS,
+  TTS_SAMPLE_RATE,
+  INCOMING_VAD_THRESHOLD,
+} from "@/lib/constants";
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -23,7 +15,7 @@ const INCOMING_VAD_THRESHOLD = 300;
 
 /**
  * Returns the average byte-magnitude of frequency bins that fall in the
- * 85–255 Hz voice-fundamental band.  Computed against the raw FFT output
+ * 85–255 Hz voice-fundamental band. Computed against the raw FFT output
  * from AnalyserNode.getByteFrequencyData().
  */
 function voiceBandAvg(
@@ -69,7 +61,7 @@ export type SpeakerState = "silent" | "outgoing" | "incoming";
 export interface UseAudioStreamOptions {
   /**
    * When true, insert a GainNode mute gate between the mic source and the
-   * encoder/analyser.  toggleMute() sets gain to 0 or 1 — the server
+   * encoder/analyser. toggleMute() sets gain to 0 or 1 — the server
    * receives silence frames rather than a disconnection.
    * @default false
    */
@@ -87,10 +79,10 @@ export interface UseAudioStreamOptions {
    * Minimum seconds ahead of AudioContext.currentTime that a new TTS chunk
    * is scheduled when no prior chunk is queued.
    *
-   * Why this exists: AudioContext.currentTime advances continuously.  When
+   * Why this exists: AudioContext.currentTime advances continuously. When
    * the first chunk of a new utterance arrives, scheduling it at exactly
    * ctx.currentTime risks a tiny underrun if the scheduler is already past
-   * that timestamp.  A small lookahead ensures clean playback starts.
+   * that timestamp. A small lookahead ensures clean playback starts.
    *
    *   0     — schedule at ctx.currentTime (fine for steady streams)
    *   0.05  — schedule 50 ms in the future; prevents glitches at utterance
@@ -108,7 +100,7 @@ export interface UseAudioStreamOptions {
 
   /**
    * Called for every loggable event inside the hook (connection steps,
-   * errors, disconnects).  The hook itself holds no log state.
+   * errors, disconnects). The hook itself holds no log state.
    */
   onLog?: (message: string) => void;
 }
@@ -116,16 +108,16 @@ export interface UseAudioStreamOptions {
 export interface UseAudioStreamReturn {
   /** Current connection and audio lifecycle status. */
   status: AudioStreamStatus;
-  /** Active speaker.  Driven by automatic frequency-bin VAD. */
+  /** Active speaker. Driven by automatic frequency-bin VAD. */
   speaker: SpeakerState;
-  /** Whether the mic is currently muted.  Always false if enableMute is false. */
+  /** Whether the mic is currently muted. Always false if enableMute is false. */
   muted: boolean;
   /** Open the WebSocket and start the audio pipeline. */
   connect: (url: string) => void;
   /** Tear down the audio pipeline and close the WebSocket. */
   disconnect: () => void;
   /**
-   * Toggle microphone mute.  No-op if enableMute is false.
+   * Toggle microphone mute. No-op if enableMute is false.
    * Returns the new muted state.
    */
   toggleMute: () => boolean;
@@ -213,7 +205,6 @@ export function useAudioStream(options: UseAudioStreamOptions): UseAudioStreamRe
     activeSourcesRef.current.clear();
     nextPlayTimeRef.current = 0;
     agentPlayingRef.current = false;
-    // Clear incoming-voice debounce so barge-in doesn't leave a stale timer.
     if (incomingSilenceTimerRef.current) {
       clearTimeout(incomingSilenceTimerRef.current);
       incomingSilenceTimerRef.current = null;
@@ -233,7 +224,7 @@ export function useAudioStream(options: UseAudioStreamOptions): UseAudioStreamRe
     const int16 = new Int16Array(data);
     const float32 = new Float32Array(int16.length);
 
-    // Measure average absolute amplitude to distinguish real voice from the
+    // Measure average absolute amplitude to distinguish real voice from
     // silence frames a muted caller still sends (zeros from their GainNode).
     let magnitudeSum = 0;
     for (let i = 0; i < int16.length; i++) {
@@ -266,21 +257,17 @@ export function useAudioStream(options: UseAudioStreamOptions): UseAudioStreamRe
 
     // ---- Incoming VAD debounce (mirrors the outgoing-mic VAD logic) ----
     if (hasIncomingVoice) {
-      // Remote party is speaking — cancel any pending silence debounce.
       if (incomingSilenceTimerRef.current) {
         clearTimeout(incomingSilenceTimerRef.current);
         incomingSilenceTimerRef.current = null;
       }
       if (!prevIncomingVoiceRef.current) {
         prevIncomingVoiceRef.current = true;
-        // Only flip badge to "incoming" when local mic is also quiet.
         if (!prevSpeakingRef.current) {
           setSpeaker("incoming");
         }
       }
     } else if (prevIncomingVoiceRef.current && !incomingSilenceTimerRef.current) {
-      // Remote party just went silent — debounce before declaring silence,
-      // matching the 400 ms debounce used for the outgoing VAD.
       incomingSilenceTimerRef.current = setTimeout(() => {
         incomingSilenceTimerRef.current = null;
         prevIncomingVoiceRef.current = false;
@@ -297,8 +284,6 @@ export function useAudioStream(options: UseAudioStreamOptions): UseAudioStreamRe
       // If no more audio is scheduled within 50ms, consider playback done.
       if (nextPlayTimeRef.current <= ctx.currentTime + 0.05) {
         agentPlayingRef.current = false;
-        // Audio fully drained — also clear the incoming voice state so it
-        // doesn't keep the badge on "incoming" after playback stops.
         prevIncomingVoiceRef.current = false;
         if (incomingSilenceTimerRef.current) {
           clearTimeout(incomingSilenceTimerRef.current);
@@ -314,7 +299,7 @@ export function useAudioStream(options: UseAudioStreamOptions): UseAudioStreamRe
   // ------------------------------------------------------------------
   const connect = useCallback(
     (url: string) => {
-      // If a connection is already live, tear it down first.
+      // Tear down any existing connection first.
       if (wsRef.current) {
         closingRef.current = true;
         if (silenceTimerRef.current) {
@@ -326,7 +311,6 @@ export function useAudioStream(options: UseAudioStreamOptions): UseAudioStreamRe
         wsRef.current = null;
       }
 
-      // Close the old AudioContext to avoid leaking it on reconnect.
       if (audioCtxRef.current && audioCtxRef.current.state !== "closed") {
         audioCtxRef.current.close().catch(() => {});
         audioCtxRef.current = null;
@@ -349,23 +333,17 @@ export function useAudioStream(options: UseAudioStreamOptions): UseAudioStreamRe
       setSpeaker("silent");
       setMuted(false);
 
-      // Kick off the async setup in a void-wrapped IIFE so connect()
-      // stays synchronous (no returned promise to the caller).
       void (async () => {
-        // 1. Start getUserMedia as a promise — do NOT await yet.
-        //    Opening the WebSocket in parallel means the server can start
-        //    forwarding audio the moment the connection is established, rather
-        //    than waiting for mic-permission to resolve first.
+        // Start getUserMedia in parallel with WebSocket so mic permission
+        // dialog doesn't block the initial connection.
         const streamPromise = navigator.mediaDevices
           .getUserMedia({ audio: true, video: false })
           .catch(() => null as MediaStream | null);
 
-        // 2. Open WebSocket immediately.
         const ws = new WebSocket(url);
         ws.binaryType = "arraybuffer";
         wsRef.current = ws;
 
-        // 3. WebSocket event handlers
         ws.onerror = () => {
           onLogRef.current?.("WebSocket error.");
         };
@@ -392,8 +370,6 @@ export function useAudioStream(options: UseAudioStreamOptions): UseAudioStreamRe
           }
         };
 
-        // 4. Audio setup inside onopen — guarantees a user-gesture context
-        //    for AudioContext creation (browser requirement).
         ws.onopen = () => {
           void (async () => {
             if (closingRef.current) {
@@ -401,13 +377,10 @@ export function useAudioStream(options: UseAudioStreamOptions): UseAudioStreamRe
               return;
             }
 
-            // Create AudioContext before any await so that playPcmChunk can
-            // play incoming binary frames as soon as the first one arrives.
             const ctx = new AudioContext({ sampleRate: TTS_SAMPLE_RATE });
             audioCtxRef.current = ctx;
             ctx.resume().catch(() => {});
 
-            // Browser capability guard
             if (!ctx.audioWorklet) {
               onLogRef.current?.("AudioWorklet not supported in this browser.");
               setStatus("error");
@@ -415,7 +388,6 @@ export function useAudioStream(options: UseAudioStreamOptions): UseAudioStreamRe
               return;
             }
 
-            // Load the audio encoder worklet
             try {
               await ctx.audioWorklet.addModule("/audio-processor.worklet.js");
             } catch {
@@ -431,13 +403,9 @@ export function useAudioStream(options: UseAudioStreamOptions): UseAudioStreamRe
               return;
             }
 
-            // Mark active now — incoming audio pipeline (AudioContext + worklet)
-            // is ready even before the microphone is connected.
             setStatus("active");
             onLogRef.current?.("Connected.");
 
-            // 5. Await getUserMedia — it was started in parallel so it has
-            //    likely already resolved by the time we get here.
             const stream = await streamPromise;
             if (!stream) {
               onLogRef.current?.("Microphone access denied.");
@@ -448,7 +416,6 @@ export function useAudioStream(options: UseAudioStreamOptions): UseAudioStreamRe
             }
 
             if (closingRef.current) {
-              // Discard mic if we were asked to disconnect while awaiting.
               stream.getTracks().forEach((t) => t.stop());
               ws.close();
               ctx.close().catch(() => {});
@@ -460,15 +427,13 @@ export function useAudioStream(options: UseAudioStreamOptions): UseAudioStreamRe
             // Build the audio graph:
             //   With mute:    micSource → GainNode ─┬─► AnalyserNode
             //                                        └─► AudioWorkletNode
-            //   Without mute: micSource ─────────── ─┬─► AnalyserNode
+            //   Without mute: micSource ─────────────┬─► AnalyserNode
             //                                         └─► AudioWorkletNode
             const micSource = ctx.createMediaStreamSource(stream);
             let upstream: AudioNode = micSource;
 
             if (enableMute) {
               const muteGain = ctx.createGain();
-              // Honour mute state that may have been set while getUserMedia
-              // was still pending (e.g. admin clicked Mute before mic granted).
               muteGain.gain.value = muteRef.current ? 0 : 1;
               muteGainRef.current = muteGain;
               micSource.connect(muteGain);
@@ -489,7 +454,6 @@ export function useAudioStream(options: UseAudioStreamOptions): UseAudioStreamRe
             worklet.port.onmessage = (ev: MessageEvent<Float32Array>) => {
               if (ws.readyState !== WebSocket.OPEN) return;
 
-              // Encode Float32 → Int16 and send as binary frame
               const float32 = ev.data;
               const int16 = new Int16Array(float32.length);
               for (let i = 0; i < float32.length; i++) {
@@ -497,7 +461,6 @@ export function useAudioStream(options: UseAudioStreamOptions): UseAudioStreamRe
               }
               ws.send(int16.buffer);
 
-              // Automatic frequency-bin VAD
               analyser.getByteFrequencyData(freqBinsRef.current!);
               const avg = voiceBandAvg(
                 freqBinsRef.current!,
@@ -523,11 +486,6 @@ export function useAudioStream(options: UseAudioStreamOptions): UseAudioStreamRe
                 silenceTimerRef.current = setTimeout(() => {
                   silenceTimerRef.current = null;
                   prevSpeakingRef.current = false;
-                  // Always update the badge when the local mic goes silent.
-                  // Use the debounced incoming-voice state: if the remote party
-                  // is actively speaking, show "incoming"; otherwise "silent".
-                  // (Using prevIncomingVoiceRef rather than a raw energy check
-                  // prevents single-chunk glitches from flipping the badge.)
                   setSpeaker(prevIncomingVoiceRef.current ? "incoming" : "silent");
                 }, VAD_SILENCE_DEBOUNCE_MS);
               }
@@ -581,12 +539,8 @@ export function useAudioStream(options: UseAudioStreamOptions): UseAudioStreamRe
   useEffect(() => {
     return () => {
       closingRef.current = true;
-      if (silenceTimerRef.current) {
-        clearTimeout(silenceTimerRef.current);
-      }
-      if (incomingSilenceTimerRef.current) {
-        clearTimeout(incomingSilenceTimerRef.current);
-      }
+      if (silenceTimerRef.current) clearTimeout(silenceTimerRef.current);
+      if (incomingSilenceTimerRef.current) clearTimeout(incomingSilenceTimerRef.current);
       teardownAudioGraph();
       wsRef.current?.close();
       audioCtxRef.current?.close().catch(() => {});

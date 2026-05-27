@@ -4,26 +4,10 @@ import { useState, useRef, useCallback, useEffect } from "react";
 import Link from "next/link";
 
 import { API_BASE, WS_BASE } from "@/lib/config";
-
-const PAGE_SIZE = 20;
-
-const ENTITIES = ["APP", "CALL", "SARVAM_STT", "SARVAM_TTS", "OPENAI_LLM", "DIALOGUE_FLOW", "HUMAN_AGENT"];
-const LEVELS = ["DEBUG", "INFO", "WARNING", "ERROR", "CRITICAL"];
-
-interface LogEntry {
-  id?: number;
-  level: string;
-  entity: string;
-  session_id: string | null;
-  timestamp: string;
-  message: string;
-}
-
-const inputCls =
-  "px-3 py-1.5 text-sm bg-white dark:bg-slate-800 border border-slate-300 dark:border-slate-600 rounded-lg text-slate-900 dark:text-white placeholder:text-slate-400 disabled:opacity-50 disabled:cursor-not-allowed focus:outline-none focus:ring-2 focus:ring-purple-400";
-
-const selectCls =
-  "px-3 py-1.5 text-sm bg-white dark:bg-slate-800 border border-slate-300 dark:border-slate-600 rounded-lg text-slate-900 dark:text-white disabled:opacity-50 disabled:cursor-not-allowed focus:outline-none focus:ring-2 focus:ring-purple-400";
+import { PAGE_SIZE, AUDIT_ENTITIES, AUDIT_LEVELS, AUDIT_INPUT_CLS, AUDIT_SELECT_CLS } from "@/lib/constants";
+import type { LogEntry } from "@/lib/types";
+import { SpinnerIcon } from "@/components/ui/icons";
+import { LogRow } from "@/components/audit/LogRow";
 
 export default function AuditPage() {
   const [entity, setEntity] = useState("");
@@ -56,7 +40,7 @@ export default function AuditPage() {
       p.set("offset", String(currentOffset));
       return p.toString();
     },
-    [entity, level, sessionId, startDate, endDate, order]
+    [entity, level, sessionId, startDate, endDate, order],
   );
 
   const search = useCallback(async () => {
@@ -130,9 +114,7 @@ export default function AuditPage() {
   }, []);
 
   useEffect(() => {
-    return () => {
-      wsRef.current?.close();
-    };
+    return () => { wsRef.current?.close(); };
   }, []);
 
   const disabled = loading || live;
@@ -147,26 +129,22 @@ export default function AuditPage() {
             value={entity}
             onChange={(e) => setEntity(e.target.value)}
             disabled={disabled}
-            className={selectCls}
+            className={AUDIT_SELECT_CLS}
           >
             <option value="">All entities</option>
-            {ENTITIES.map((e) => (
-              <option key={e} value={e}>
-                {e}
-              </option>
+            {AUDIT_ENTITIES.map((e) => (
+              <option key={e} value={e}>{e}</option>
             ))}
           </select>
           <select
             value={level}
             onChange={(e) => setLevel(e.target.value)}
             disabled={disabled}
-            className={selectCls}
+            className={AUDIT_SELECT_CLS}
           >
             <option value="">All levels</option>
-            {LEVELS.map((l) => (
-              <option key={l} value={l}>
-                {l}
-              </option>
+            {AUDIT_LEVELS.map((l) => (
+              <option key={l} value={l}>{l}</option>
             ))}
           </select>
           <input
@@ -174,27 +152,27 @@ export default function AuditPage() {
             onChange={(e) => setSessionId(e.target.value)}
             disabled={disabled}
             placeholder="Session ID"
-            className={`${inputCls} w-48`}
+            className={`${AUDIT_INPUT_CLS} w-48`}
           />
           <input
             type="datetime-local"
             value={startDate}
             onChange={(e) => setStartDate(e.target.value)}
             disabled={disabled}
-            className={inputCls}
+            className={AUDIT_INPUT_CLS}
           />
           <input
             type="datetime-local"
             value={endDate}
             onChange={(e) => setEndDate(e.target.value)}
             disabled={disabled}
-            className={inputCls}
+            className={AUDIT_INPUT_CLS}
           />
           <select
             value={order}
             onChange={(e) => setOrder(e.target.value as "newest" | "oldest")}
             disabled={disabled}
-            className={selectCls}
+            className={AUDIT_SELECT_CLS}
           >
             <option value="newest">Newest first</option>
             <option value="oldest">Oldest first</option>
@@ -238,16 +216,7 @@ export default function AuditPage() {
           )}
           {loading && (
             <span className="flex items-center gap-1.5 text-sm text-slate-500 dark:text-slate-400">
-              <svg
-                className="w-4 h-4 animate-spin"
-                viewBox="0 0 24 24"
-                fill="none"
-                stroke="currentColor"
-                strokeWidth={2.5}
-              >
-                <circle cx={12} cy={12} r={10} strokeOpacity={0.25} />
-                <path d="M12 2a10 10 0 0 1 10 10" />
-              </svg>
+              <SpinnerIcon className="w-4 h-4 animate-spin" />
               Loading...
             </span>
           )}
@@ -290,109 +259,5 @@ export default function AuditPage() {
         )}
       </div>
     </div>
-  );
-}
-
-function LogRow({ log }: { log: LogEntry }) {
-  const [expanded, setExpanded] = useState(false);
-
-  const ts = new Date(log.timestamp).toLocaleTimeString(undefined, {
-    hour: "2-digit",
-    minute: "2-digit",
-    second: "2-digit",
-    fractionalSecondDigits: 3,
-  });
-
-  return (
-    <div className="rounded-lg bg-white dark:bg-slate-800 border border-slate-100 dark:border-slate-700 text-sm font-mono overflow-hidden">
-      <div className="flex items-start gap-2.5 px-3 py-2">
-        <span className="text-slate-400 dark:text-slate-500 shrink-0 text-xs pt-0.5">
-          {ts}
-        </span>
-        <LevelBadge level={log.level} />
-        <span className="text-xs px-2 py-0.5 rounded bg-slate-100 dark:bg-slate-700 text-slate-600 dark:text-slate-300 shrink-0">
-          {log.entity}
-        </span>
-        {log.session_id && <SessionId id={log.session_id} />}
-        <span
-          className={`text-slate-700 dark:text-slate-300 break-all leading-snug flex-1 ${
-            expanded ? "" : "line-clamp-2"
-          }`}
-        >
-          {log.message}
-        </span>
-        <button
-          onClick={() => setExpanded((v) => !v)}
-          className="shrink-0 mt-0.5 text-slate-400 hover:text-slate-600 dark:hover:text-slate-200 transition-colors"
-          title={expanded ? "Collapse" : "Expand"}
-        >
-          <svg
-            viewBox="0 0 16 16"
-            className={`w-3.5 h-3.5 fill-current transition-transform ${expanded ? "rotate-180" : ""}`}
-          >
-            <path d="M4.22 6.22a.75.75 0 0 1 1.06 0L8 8.94l2.72-2.72a.75.75 0 1 1 1.06 1.06l-3.25 3.25a.75.75 0 0 1-1.06 0L4.22 7.28a.75.75 0 0 1 0-1.06z" />
-          </svg>
-        </button>
-      </div>
-    </div>
-  );
-}
-
-function LevelBadge({ level }: { level: string }) {
-  const styles: Record<string, string> = {
-    DEBUG:
-      "bg-slate-100 text-slate-500 dark:bg-slate-700 dark:text-slate-400",
-    INFO: "bg-blue-100 text-blue-700 dark:bg-blue-900/50 dark:text-blue-300",
-    WARNING:
-      "bg-amber-100 text-amber-700 dark:bg-amber-900/50 dark:text-amber-300",
-    ERROR:
-      "bg-red-100 text-red-700 dark:bg-red-900/50 dark:text-red-300",
-    CRITICAL:
-      "bg-red-600 text-white dark:bg-red-700",
-  };
-  const cls =
-    styles[level] ?? "bg-slate-100 text-slate-500 dark:bg-slate-700 dark:text-slate-400";
-
-  return (
-    <span
-      className={`text-xs font-bold px-2 py-0.5 rounded shrink-0 tracking-wide ${cls}`}
-    >
-      {level}
-    </span>
-  );
-}
-
-function SessionId({ id }: { id: string }) {
-  const [copied, setCopied] = useState(false);
-
-  const copy = useCallback(() => {
-    navigator.clipboard.writeText(id).then(() => {
-      setCopied(true);
-      setTimeout(() => setCopied(false), 1500);
-    });
-  }, [id]);
-
-  return (
-    <span className="group relative flex items-center gap-1 shrink-0">
-      <span className="text-xs text-slate-400 dark:text-slate-500 font-mono">
-        {id.slice(0, 8)}
-      </span>
-      <button
-        onClick={copy}
-        title="Copy session ID"
-        className="opacity-0 group-hover:opacity-100 transition-opacity p-0.5 rounded text-slate-400 hover:text-slate-600 dark:hover:text-slate-200"
-      >
-        {copied ? (
-          <svg viewBox="0 0 16 16" className="w-3 h-3 fill-green-500">
-            <path d="M13.78 4.22a.75.75 0 0 1 0 1.06l-7.25 7.25a.75.75 0 0 1-1.06 0L2.22 9.28a.75.75 0 0 1 1.06-1.06L6 10.94l6.72-6.72a.75.75 0 0 1 1.06 0z" />
-          </svg>
-        ) : (
-          <svg viewBox="0 0 16 16" className="w-3 h-3 fill-current">
-            <path d="M0 6.75C0 5.784.784 5 1.75 5h1.5a.75.75 0 0 1 0 1.5h-1.5a.25.25 0 0 0-.25.25v7.5c0 .138.112.25.25.25h7.5a.25.25 0 0 0 .25-.25v-1.5a.75.75 0 0 1 1.5 0v1.5A1.75 1.75 0 0 1 9.25 16h-7.5A1.75 1.75 0 0 1 0 14.25Z" />
-            <path d="M5 1.75C5 .784 5.784 0 6.75 0h7.5C15.216 0 16 .784 16 1.75v7.5A1.75 1.75 0 0 1 14.25 11h-7.5A1.75 1.75 0 0 1 5 9.25Zm1.75-.25a.25.25 0 0 0-.25.25v7.5c0 .138.112.25.25.25h7.5a.25.25 0 0 0 .25-.25v-7.5a.25.25 0 0 0-.25-.25Z" />
-          </svg>
-        )}
-      </button>
-    </span>
   );
 }
