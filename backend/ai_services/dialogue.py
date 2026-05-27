@@ -18,8 +18,8 @@ class DialogueFlow:
         self.first_validate = (
             True  # Flag to track if we're on the first validation turn
         )
-        self.agent_confidence: CONFIDENCE_LEVEL | None = None
-        self.user_confidence: CONFIDENCE_LEVEL | None = None
+        self.system_score: CONFIDENCE_LEVEL | None = None
+        self.user_score: CONFIDENCE_LEVEL | None = None
         self.log = get_logger(LOG_ENTITIES.DIALOGUE_FLOW, session_id=session_id)
         self.llm_log = get_logger(LOG_ENTITIES.OPENAI_LLM, session_id=session_id)
 
@@ -28,16 +28,16 @@ class DialogueFlow:
             "phase": self.phase,
             "turns": self.turns,
             "semantic_memory": SemanticMemory(**self.semantic_memory.model_dump()),
-            "agent_confidence": self.agent_confidence,
-            "user_confidence": self.user_confidence,
+            "system_score": self.system_score,
+            "user_score": self.user_score,
         }
 
     def restore_state(self, state: dict) -> None:
         self.phase = state["phase"]
         self.turns = state["turns"]
         self.semantic_memory = state["semantic_memory"]
-        self.agent_confidence = state["agent_confidence"]
-        self.user_confidence = state["user_confidence"]
+        self.system_score = state["system_score"]
+        self.user_score = state["user_score"]
 
     async def stream_greeting(self):
         """
@@ -55,7 +55,7 @@ class DialogueFlow:
         if self.phase == PHASE.COMPLETE:
             self.log.info("get_response called in COMPLETE phase — ignoring")
 
-            if self.user_confidence in [
+            if self.user_score in [
                 CONFIDENCE_LEVEL.GREEN,
                 CONFIDENCE_LEVEL.YELLOW,
             ]:
@@ -70,7 +70,7 @@ class DialogueFlow:
                     yield response[
                         "en-IN"
                     ]  # default to english if language not in response mapping
-            elif self.user_confidence == CONFIDENCE_LEVEL.RED:
+            elif self.user_score == CONFIDENCE_LEVEL.RED:
                 response = {
                     "hi-IN": "मुझे bbbbbbbbb है, मैं आपकी समस्या को समझ नहीं पा रहा हूँ। कृपया मुझे एक पल दें, मैं आपको एक मानव एजेंट से जोड़ता हूँ।",
                     "en-IN": "Apologies, I'm having trouble understanding your issue. Please hold on, I'm connecting you to a human agent for better assistance.",
@@ -110,7 +110,7 @@ class DialogueFlow:
             )
 
             self.turns += 1
-            self.agent_confidence = response.agent_confidence
+            self.system_score = response.system_score
             # Preserve language through the rebuild — language is locked by session.py
             # before this runs, and must survive SemanticMemory reconstruction every turn.
 
@@ -129,12 +129,12 @@ class DialogueFlow:
                 location=response.location,
                 since_when=response.since_when,
             )
-            self.agent_confidence = response.agent_confidence
+            self.system_score = response.system_score
             self.log.info(
                 f"semantic_memory rebuilt — lang={locked_language!r} turns={self.turns}"
             )
             if self.turns >= self.max_turns or response.follow_up == False:
-                if response.agent_confidence in [
+                if response.system_score in [
                     CONFIDENCE_LEVEL.GREEN,
                     CONFIDENCE_LEVEL.YELLOW,
                 ]:
@@ -144,7 +144,7 @@ class DialogueFlow:
                     self.log.info(
                         "phase transitioning to VALIDATION based on follow_up=false"
                     )
-                elif response.agent_confidence == CONFIDENCE_LEVEL.RED:
+                elif response.system_score == CONFIDENCE_LEVEL.RED:
                     respose = {
                         "hi-IN": "मुझे aaaaaaa है, मैं आपकी समस्या को समझ नहीं पा रहा हूँ। कृपया मुझे एक पल दें, मैं आपको एक मानव एजेंट से जोड़ता हूँ।",
                         "en-IN": "Apologies, I'm having trouble understanding your issue. Please hold on, I'm connecting you to a human agent for better assistance.",
@@ -173,8 +173,8 @@ class DialogueFlow:
                 ),
             )
 
-            self.agent_confidence = response.agent_confidence
-            self.user_confidence = response.user_confidence
+            self.system_score = response.system_score
+            self.user_score = response.user_score
 
             print("------------------------------------")
             print(response.model_dump())

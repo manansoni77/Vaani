@@ -49,14 +49,14 @@ async def call(websocket: WebSocket):
             summary=mem.summary,
             intent=mem.intent,
             key_details=mem.key_details,
-            agent_confidence=(
-                session.dialogue_flow.agent_confidence.value
-                if session.dialogue_flow.agent_confidence
+            system_score=(
+                session.dialogue_flow.system_score
+                if session.dialogue_flow.system_score is not None
                 else None
             ),
-            user_confidence=(
-                session.dialogue_flow.user_confidence.value
-                if session.dialogue_flow.user_confidence
+            user_score=(
+                session.dialogue_flow.user_score
+                if session.dialogue_flow.user_score is not None
                 else None
             ),
             query_type=mem.query_type.value if mem.query_type else None,

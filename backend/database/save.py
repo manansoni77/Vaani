@@ -7,6 +7,7 @@ _default_logger = get_logger(LOG_ENTITIES.APP)
 
 def save_call_session(
     session_id: str,
+    phone_number: str,
     started_at: str,
     ended_at: str,
     duration_s: float,
@@ -14,42 +15,78 @@ def save_call_session(
     turns: int,
     sentiment: str,
     urgency_level: str,
-    human_requested: bool,
-    transcript: str,
+    human_requested: bool = False,
+    transcript: str = "",
     audio_url: str | None = None,
+    language: str | None = None,
     audio_mixed_url: str | None = None,
     summary: str | None = None,
     intent: str | None = None,
     key_details: str | None = None,
-    agent_confidence: str | None = None,
-    user_confidence: str | None = None,
+    system_score: float | None = None,
+    user_score: float | None = None,
+    urgency_score: float | None = None,
     query_type: str | None = None,
+    routed_department: str | None = None,
 ) -> None:
     try:
-        with Session(get_engine()) as db_session:
-            db_session.add(
+        with Session(get_engine()) as db:
+            # 1. get or create caller by phone number
+            caller = db.query(Caller).filter_by(phone_number=phone_number).first()
+            if caller is None:
+                caller = Caller(
+                    phone_number=phone_number,
+                    last_call_language=language,
+                    created_at=started_at,
+                    updated_at=ended_at,
+                )
+                db.add(caller)
+                db.flush()  # get caller.id before using it
+            else:
+                caller.last_call_language = language
+                caller.updated_at = ended_at
+
+            # 2. create ticket for this call
+            ticket = Ticket(
+                caller_id=caller.id,
+                routed_department=routed_department,
+                status="open",
+                priority="normal",
+                created_at=started_at,
+                updated_at=ended_at,
+            )
+            db.add(ticket)
+            db.flush()  # get ticket.id before using it
+
+            # 3. create session linked to caller + ticket
+            db.add(
                 CallSessionRecord(
                     session_id=session_id,
+                    ticket_id=ticket.id,
+                    caller_id=caller.id,
+                    taken_over_by=taken_over_by,
                     started_at=started_at,
                     ended_at=ended_at,
                     duration_s=duration_s,
                     phase=phase,
+                    language=language,
+                    system_score=system_score,
+                    user_score=user_score,
+                    urgency_score=urgency_score,
                     turns=turns,
                     sentiment=sentiment,
-                    urgency_level=urgency_level,
-                    human_requested=human_requested,
                     transcript=transcript,
+                    query_type=query_type,
+                    human_requested=human_requested,
                     audio_url=audio_url,
                     audio_mixed_url=audio_mixed_url,
                     summary=summary,
                     intent=intent,
                     key_details=key_details,
-                    agent_confidence=agent_confidence,
-                    user_confidence=user_confidence,
-                    query_type=query_type,
                 )
             )
-            db_session.commit()
+            db.commit()
+
     except Exception:
         _default_logger.error(
             f"failed to save call session {session_id!r}", exc_info=True

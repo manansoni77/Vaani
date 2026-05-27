@@ -7,7 +7,6 @@ from pydantic import BaseModel
 from sqlalchemy.orm import Session
 
 from database import CallSessionRecord
-from constants import QUERY_TYPE
 from sessions import (
     HumanAgentSession,
     SessionBroadcaster,
@@ -25,23 +24,27 @@ _log = get_logger(LOG_ENTITIES.APP)
 class CallSessionOut(BaseModel):
     id: int
     session_id: str
+    ticket_id: int | None = None
+    caller_id: int | None = None
+    taken_over_by: int | None = None
     started_at: str
     ended_at: str
     duration_s: float
     phase: str
+    language: str | None = None
+    system_score: float | None = None    # was agent_confidence
+    user_score: float | None = None      # was user_confidence
+    urgency_score: float | None = None   # was urgency_level
     turns: int
     sentiment: str
-    urgency_level: str
-    human_requested: bool
     transcript: str
+    query_type: str | None = None
+    human_requested: bool
     audio_url: str | None = None
     audio_mixed_url: str | None = None
     summary: str | None = None
     intent: str | None = None
     key_details: str | None = None
-    agent_confidence: str | None = None
-    user_confidence: str | None = None
-    query_type: str | None = None
 
     model_config = {"from_attributes": True}
 
@@ -56,23 +59,17 @@ def list_completed_sessions(
         default=None,
         description="Filter sessions started on or before this time (ISO 8601)",
     ),
-    query_type: QUERY_TYPE | None = Query(
-        default=None,
-        description="Filter by query type: EMERGENCY, MUNICIPALITY, or GENERAL",
-    ),
     limit: int = Query(default=20, ge=1, le=1000),
     offset: int = Query(default=0, ge=0),
     order: Literal["newest", "oldest"] = Query(default="newest"),
 ) -> list[CallSessionOut]:
-    """List completed call sessions, ordered by start time, with optional date range and query type filters."""
+    """List completed call sessions, ordered by start time, with optional date range filters."""
     with Session(get_engine()) as db:
         q = db.query(CallSessionRecord)
         if start_date:
             q = q.filter(CallSessionRecord.started_at >= start_date.isoformat())
         if end_date:
             q = q.filter(CallSessionRecord.started_at <= end_date.isoformat())
-        if query_type:
-            q = q.filter(CallSessionRecord.query_type == query_type.value)
         sort_col = (
             CallSessionRecord.id.desc()
             if order == "newest"
@@ -90,12 +87,7 @@ async def list_sessions() -> list[dict]:
 
 @router.websocket("/stream")
 async def stream_sessions(websocket: WebSocket) -> None:
-    """Stream live session status events to the admin dashboard.
-
-    New connections receive an immediate snapshot of all currently active
-    sessions, then receive incremental updates as sessions start, change
-    state, or end.
-    """
+    """Stream live session status events to the admin dashboard."""
     await websocket.accept()
     broadcaster = SessionBroadcaster.get()
     queue = broadcaster.subscribe()
@@ -115,7 +107,7 @@ class TakeoverRequest(BaseModel):
 
 @router.post("/{session_id}/takeover")
 async def takeover_session(session_id: str, body: TakeoverRequest) -> dict:
-    """Claim a live call session for human handling. Only one agent can claim at a time."""
+    """Claim a live call session for human handling."""
     session = get_call(session_id)
     if session is None:
         raise HTTPException(status_code=404, detail="session not found or not active")
@@ -136,11 +128,7 @@ async def human_agent_audio(
     session_id: str,
     agent_id: str = Query(...),
 ) -> None:
-    """Audio stream for the human agent after takeover.
-
-    Send binary audio chunks and VAD signals identical to the /call protocol.
-    Audio is forwarded live to the caller; VAD false flushes a 'human:' transcript turn.
-    """
+    """Audio stream for the human agent after takeover."""
     await websocket.accept()
     session = get_call(session_id)
     if session is None:

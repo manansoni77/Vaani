@@ -13,8 +13,8 @@ from ai_services import DialogueFlow
 from ai_services.stt_tts import get_caller_stt_client, get_tts_client
 from ai_services.stt_tts.base import BaseTTSClient
 from loggers import get_logger, LOG_ENTITIES
+from database import save_call_session
 from .broadcaster import SessionBroadcaster, build_status
-
 
 
 @dataclass
@@ -23,7 +23,7 @@ class CallSession:
     websocket: WebSocket
     loop: asyncio.AbstractEventLoop
     session_start: float
-    # conversationState: ConversationState
+    phone_number: str = "unknown"           # added: caller's phone number
 
     audio_chunks: list[bytes] = field(default_factory=list)
     tts_events: list[tuple[float, bytes]] = field(default_factory=list)
@@ -98,8 +98,6 @@ class CallSession:
             summary=mem.summary,
             intent=mem.intent,
             key_details=mem.key_details,
-            agent_confidence=df.agent_confidence.value if df.agent_confidence else None,
-            user_confidence=df.user_confidence.value if df.user_confidence else None,
             human_takeover=self.human_takeover,
             claimed_by=self.claimed_by,
             query_type=mem.query_type.value if mem.query_type else None,
@@ -250,19 +248,15 @@ class CallSession:
                     self.call_log.info("websocket.disconnect received")
                     break
                 if message.get("bytes"):
-                    # print('receiving audio...')
                     chunk = message["bytes"]
                     self.audio_chunks.append(chunk)
                     if not VAD_GATE_STT or self._speaking:
                         await self.audio_queue.put(chunk)
                     if self.human_agent_ws is not None:
-                        # print('forwarding audio to human agent...')
                         try:
                             await self.human_agent_ws.send_bytes(chunk)
                         except Exception:
                             self.human_agent_ws = None
-                    # else:
-                    #     self.call_log.debug("VAD gate active — audio chunk dropped")
                 elif message.get("text"):
                     self._handle_text_message(message["text"])
         except WebSocketDisconnect:
@@ -277,7 +271,6 @@ class CallSession:
         if vad.get("type") == "vad":
             was_speaking = self._speaking
             self._speaking = bool(vad.get("speaking"))
-            # self.call_log.debug(f"VAD: speaking={self._speaking}")
             if was_speaking != self._speaking:
                 self._emit_status("session_updated")
             if not was_speaking and self._speaking:
@@ -289,9 +282,7 @@ class CallSession:
                 )
 
     def _interrupt_if_processing(self) -> None:
-        """Cancel in-flight LLM/TTS processing when user starts speaking again."""
         if self._process_task and not self._process_task.done():
-            # LLM still running — cancel and save text for combining on next flush
             self._interrupted_text = self._processing_text
             self._interrupted_lang = self._processing_lang
             self._process_task.cancel()
@@ -304,7 +295,6 @@ class CallSession:
                 f"processing interrupted — saved text: {self._interrupted_text!r}"
             )
         elif self._ai_speaking:
-            # LLM done, agent turn complete — stop TTS and process user reply as a fresh turn
             self._tts_stop = True
             self._drain_tts_queue()
             self._ai_speaking = False
@@ -327,7 +317,6 @@ class CallSession:
         if not self._pending_transcript_parts:
             if not self._interrupted_text:
                 return
-            # interrupted but no new transcript yet — reprocess the saved text as-is
             full_text = self._interrupted_text
             lang = self._interrupted_lang or "en-IN"
             self._interrupted_text = None
@@ -345,9 +334,7 @@ class CallSession:
                 self._interrupted_lang = None
                 self.call_log.info(f"combined with interrupted text: {full_text!r}")
 
-        # Allow TTS to run again for this new processing cycle
         self._tts_stop = False
-
         self.stt_log.info(f"speech ended — processing: {full_text!r}")
         user_turn = {
             "role": "user",
@@ -356,18 +343,12 @@ class CallSession:
         }
         self.conversation_turns.append(user_turn)
 
-        # lock only after first substantive CAPTURE turn completes
-        # dialogue_flow.turns increments after turn 1 is processed
         if not self._lang_locked:
             self.dialogue_flow.semantic_memory.user_language = lang
             self._lang_locked = True
             self.call_log.info(
                 f"language locked for session after first capture turn: {lang!r}"
             )
-        # elif not self._lang_locked:
-        # still in greeting/first turn — update but don't lock yet
-        # self.dialogue_flow.semantic_memory.user_language = lang
-        # self.call_log.info(f"language updated (not locked yet): {lang!r}")
         else:
             self.call_log.info(
                 f"language already locked as {self.dialogue_flow.semantic_memory.user_language!r} — ignoring {lang!r}"
@@ -396,13 +377,11 @@ class CallSession:
                 "processing cancelled — user spoke again; rolling back state"
             )
             self.dialogue_flow.restore_state(saved_state)
-            # Roll back language lock if this was the first turn
             if saved_state["semantic_memory"].user_language != lang:
                 self._lang_locked = False
                 self.call_log.info(
                     "language lock rolled back due to cancellation on first turn"
                 )
-
             for i, turn in enumerate(self.conversation_turns):
                 if turn is user_turn:
                     del self.conversation_turns[i]
@@ -454,6 +433,7 @@ class CallSession:
             self.stt_log.info("no transcript produced")
 
         await self._save_audio()
+        await self._save_to_db()          # added: was missing entirely
 
     @staticmethod
     async def _await_task(handle: asyncio.Task | None, timeout: float, log) -> None:
@@ -500,18 +480,53 @@ class CallSession:
                         self.call_log.info(f"mixed audio uploaded: {mixed_url}")
         except Exception as e:
             import traceback
-
             self.call_log.error(f"audio upload failed: {e!r}\n{traceback.format_exc()}")
+
+    async def _save_to_db(self) -> None:
+        mem = self.dialogue_flow.semantic_memory
+        df = self.dialogue_flow
+        ended_at = datetime.now(timezone.utc).isoformat(timespec="milliseconds")
+        duration_s = self.loop.time() - self.session_start
+
+        def _conf_to_float(val: object) -> float | None:
+            # convert confidence enums like 'GREEN'/'YELLOW'/'RED' to floats
+            if val is None:
+                return None
+            try:
+                return float(val)  # type: ignore[arg-type]
+            except Exception:
+                mapping = {"GREEN": 1.0, "YELLOW": 0.5, "RED": 0.0}
+                return mapping.get(str(val).upper())
+
+        save_call_session(
+            session_id=self.session_id,
+            phone_number=self.phone_number,
+            started_at=self.started_at,
+            ended_at=ended_at,
+            duration_s=duration_s,
+            phase=df.phase.value,
+            turns=df.turns,
+            sentiment=mem.sentiment.value,
+            transcript=self._format_transcript(),
+            query_type=mem.query_type.value if mem.query_type else None,
+            language=mem.user_language,
+            system_score=_conf_to_float(df.system_score.value) if df.system_score else None,
+            user_score=_conf_to_float(df.user_score.value) if df.user_score else None,
+            # save_call_session expects a str for urgency_level; provide empty string when not set
+            urgency_level=str(mem.urgency_level.value) if mem.urgency_level else "",
+            human_requested=mem.human_requested,
+            audio_url=self.audio_url,
+            audio_mixed_url=self.audio_mixed_url,
+            summary=mem.summary,
+            intent=mem.intent,
+            key_details=str(mem.key_details) if mem.key_details else None,
+            routed_department=mem.service_type.value if mem.service_type else None,
+        )
+        self.call_log.info("session saved to db")
 
     # ------------------------------------------------------------------ entry point
 
     async def _send_greeting(self) -> None:
-        """
-        Streams the fixed greeting via dialogue_flow.stream_greeting().
-        Fires automatically on session start — no user input needed.
-        stream_greeting() transitions GREETING → CAPTURE internally so the
-        first user message lands directly in CAPTURE.
-        """
         self.call_log.info("sending greeting")
         agent_parts: list[str] = []
 
