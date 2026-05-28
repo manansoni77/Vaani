@@ -488,15 +488,8 @@ class CallSession:
         ended_at = datetime.now(timezone.utc).isoformat(timespec="milliseconds")
         duration_s = self.loop.time() - self.session_start
 
-        def _conf_to_float(val: object) -> float | None:
-            # convert confidence enums like 'GREEN'/'YELLOW'/'RED' to floats
-            if val is None:
-                return None
-            try:
-                return float(val)  # type: ignore[arg-type]
-            except Exception:
-                mapping = {"GREEN": 1.0, "YELLOW": 0.5, "RED": 0.0}
-                return mapping.get(str(val).upper())
+        _CONF_SCORE = {"GREEN": 1.0, "YELLOW": 0.5, "RED": 0.0}
+        _URGENCY_SCORE = {"none": 0.0, "low": 0.33, "medium": 0.66, "high": 1.0}
 
         save_call_session(
             session_id=self.session_id,
@@ -510,10 +503,9 @@ class CallSession:
             transcript=self._format_transcript(),
             query_type=mem.query_type.value if mem.query_type else None,
             language=mem.user_language,
-            system_score=_conf_to_float(df.system_score.value) if df.system_score else None,
-            user_score=_conf_to_float(df.user_score.value) if df.user_score else None,
-            # save_call_session expects a str for urgency_level; provide empty string when not set
-            urgency_level=str(mem.urgency_level.value) if mem.urgency_level else "",
+            system_score=_CONF_SCORE.get(df.system_score.value) if df.system_score else None,
+            user_score=_CONF_SCORE.get(df.user_score.value) if df.user_score else None,
+            urgency_score=_URGENCY_SCORE.get(mem.urgency_level.value) if mem.urgency_level else None,
             human_requested=mem.human_requested,
             audio_url=self.audio_url,
             audio_mixed_url=self.audio_mixed_url,
