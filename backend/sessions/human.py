@@ -1,16 +1,10 @@
 import asyncio
-import base64
 import json
-import os
 
 from fastapi import WebSocket, WebSocketDisconnect
-from sarvamai import AsyncSarvamAI
 
-from audio_utils import PCM_SAMPLE_RATE
-from constants import LOG_ENTITIES
-from logger import get_logger
-
-SARVAM_API_KEY = os.getenv("SARVAM_API_KEY")
+from ai_services.stt_tts import get_agent_stt_client
+from loggers import get_logger, LOG_ENTITIES
 
 
 class HumanAgentSession:
@@ -41,14 +35,19 @@ class HumanAgentSession:
             pass
 
     async def run(self) -> None:
-        self.log.info(f"human agent connected — claimed_by={self.call_session.claimed_by!r}")
+        self.log.info(
+            f"human agent connected — claimed_by={self.call_session.claimed_by!r}"
+        )
         self.call_session.human_agent_ws = self.websocket
-        self.log.info("registered as call_session.human_agent_ws — caller audio will be forwarded")
+        self.log.info(
+            "registered as call_session.human_agent_ws — caller audio will be forwarded"
+        )
+        stt_client = get_agent_stt_client()
         stt_handle = None
-        if SARVAM_API_KEY:
-            stt_handle = asyncio.create_task(self._stt_task())
+        if stt_client is not None:
+            stt_handle = asyncio.create_task(self._stt_task(stt_client))
         else:
-            self.log.warning("SARVAM_API_KEY not set — STT disabled, transcript will not be generated")
+            self.log.warning("STT disabled — transcript will not be generated")
         try:
             await self._receive_loop()
         finally:
@@ -77,12 +76,13 @@ class HumanAgentSession:
                     break
                 if msg.get("bytes"):
                     chunk = msg["bytes"]
-                    self.log.debug(f"forwarding audio chunk: {len(chunk)} bytes")
-                    try:
-                        await self.call_session.websocket.send_bytes(chunk)
-                    except Exception as e:
-                        self.log.warning(f"failed to forward audio to caller: {e!r}")
-                    self._audio_queue.put_nowait(chunk)
+                    if self._speaking:
+                        self.log.debug(f"forwarding audio chunk: {len(chunk)} bytes")
+                        try:
+                            await self.call_session.websocket.send_bytes(chunk)
+                        except Exception as e:
+                            self.log.warning(f"failed to forward audio to caller: {e!r}")
+                        self._audio_queue.put_nowait(chunk)
                 elif msg.get("text"):
                     await self._handle_vad(msg["text"])
         except WebSocketDisconnect:
@@ -108,47 +108,20 @@ class HumanAgentSession:
         full_text = " ".join(self._pending_parts)
         self._pending_parts.clear()
         self.log.info(f"human turn: {full_text!r}")
-        self.call_session.conversation_turns.append({"role": "human", "text": full_text})
+        self.call_session.conversation_turns.append(
+            {"role": "human", "text": full_text}
+        )
         self.call_session._emit_status("session_updated")
 
-    async def _stt_task(self) -> None:
+    async def _stt_task(self, stt_client) -> None:
         self.log.info("STT task starting")
-        sarvam = AsyncSarvamAI(api_subscription_key=SARVAM_API_KEY)
         try:
-            self.log.info("STT connecting to Sarvam...")
-            async with sarvam.speech_to_text_translate_streaming.connect(
-                model="saaras:v3",
-                mode="translate",
-                sample_rate=str(PCM_SAMPLE_RATE),
-                input_audio_codec="pcm_s16le",
-                high_vad_sensitivity=True,
-            ) as sarvam_ws:
-                self.log.info("STT connected")
-                send = asyncio.create_task(self._send_audio(sarvam_ws))
-                recv = asyncio.create_task(self._recv_transcripts(sarvam_ws))
-                await send
-                recv.cancel()
-                try:
-                    await recv
-                except asyncio.CancelledError:
-                    pass
+            self.log.info("STT connecting...")
+            await stt_client.stream(self._audio_queue, self._on_stt_transcript)
+            self.log.info("STT stream ended")
         except Exception as e:
             self.log.error(f"STT error ({type(e).__name__}): {e!r}")
 
-    async def _send_audio(self, sarvam_ws) -> None:
-        while (chunk := await self._audio_queue.get()) is not None:
-            self.log.debug(f"sending audio to STT: {len(chunk)} bytes")
-            b64 = base64.b64encode(chunk).decode()
-            await sarvam_ws.translate(audio=b64)
-        self.log.debug("audio queue drained — STT send loop done")
-
-    async def _recv_transcripts(self, sarvam_ws) -> None:
-        async for message in sarvam_ws:
-            if getattr(message, "type", None) == "data":
-                data = getattr(message, "data", None)
-                if data:
-                    text = getattr(data, "transcript", None)
-                    lang = getattr(data, "language_code", None) or "en-IN"
-                    if text:
-                        self.log.info(f"STT transcript chunk: {text!r}  lang={lang}")
-                        self._pending_parts.append(text)
+    async def _on_stt_transcript(self, text: str, lang: str) -> None:
+        self.log.info(f"STT transcript chunk: {text!r}  lang={lang}")
+        self._pending_parts.append(text)

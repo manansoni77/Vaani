@@ -6,11 +6,17 @@ from fastapi import APIRouter, HTTPException, Query, WebSocket, WebSocketDisconn
 from pydantic import BaseModel
 from sqlalchemy.orm import Session
 
-import session_registry
-from constants import LOG_ENTITIES, QUERY_TYPE
-from human_session import HumanAgentSession
-from logger import CallSessionRecord, get_engine, get_logger
-from session_broadcaster import SessionBroadcaster
+from database import CallSessionRecord
+from constants import QUERY_TYPE
+from sessions import (
+    HumanAgentSession,
+    SessionBroadcaster,
+    get_call,
+    register_human,
+    unregister_human,
+)
+from database import get_engine
+from loggers import get_logger, LOG_ENTITIES
 
 router = APIRouter(prefix="/sessions", tags=["sessions"])
 _log = get_logger(LOG_ENTITIES.APP)
@@ -110,7 +116,7 @@ class TakeoverRequest(BaseModel):
 @router.post("/{session_id}/takeover")
 async def takeover_session(session_id: str, body: TakeoverRequest) -> dict:
     """Claim a live call session for human handling. Only one agent can claim at a time."""
-    session = session_registry.get_call(session_id)
+    session = get_call(session_id)
     if session is None:
         raise HTTPException(status_code=404, detail="session not found or not active")
     if session.human_takeover:
@@ -136,7 +142,7 @@ async def human_agent_audio(
     Audio is forwarded live to the caller; VAD false flushes a 'human:' transcript turn.
     """
     await websocket.accept()
-    session = session_registry.get_call(session_id)
+    session = get_call(session_id)
     if session is None:
         await websocket.close(code=4004, reason="session not found")
         return
@@ -144,8 +150,8 @@ async def human_agent_audio(
         await websocket.close(code=4003, reason="not authorized")
         return
     human_session = HumanAgentSession(call_session=session, agent_websocket=websocket)
-    session_registry.register_human(session_id, human_session)
+    register_human(session_id, human_session)
     try:
         await human_session.run()
     finally:
-        await session_registry.unregister_human(session_id)
+        await unregister_human(session_id)
