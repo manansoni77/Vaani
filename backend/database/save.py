@@ -1,9 +1,10 @@
 from sqlalchemy.orm import Session
 from loggers import get_logger, LOG_ENTITIES
 from .engine import get_engine
-from .models import CallSessionRecord
+from .models import CallSessionRecord, Caller, Ticket
 
 _default_logger = get_logger(LOG_ENTITIES.APP)
+
 
 def save_call_session(
     session_id: str,
@@ -14,7 +15,6 @@ def save_call_session(
     phase: str,
     turns: int,
     sentiment: str,
-    urgency_level: str,
     human_requested: bool = False,
     transcript: str = "",
     audio_url: str | None = None,
@@ -28,6 +28,7 @@ def save_call_session(
     urgency_score: float | None = None,
     query_type: str | None = None,
     routed_department: str | None = None,
+    taken_over_by: int | None = None,
 ) -> None:
     try:
         with Session(get_engine()) as db:
@@ -43,8 +44,8 @@ def save_call_session(
                 db.add(caller)
                 db.flush()  # get caller.id before using it
             else:
-                caller.last_call_language = language
-                caller.updated_at = ended_at
+                caller.last_call_language = language # type: ignore
+                caller.updated_at = ended_at # type: ignore
 
             # 2. create ticket for this call
             ticket = Ticket(

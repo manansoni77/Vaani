@@ -15,7 +15,7 @@ router = APIRouter(prefix="/logs", tags=["logs"])
 class LogEntryOut(BaseModel):
     id: int
     level: str
-    entity: str
+    entity_type: str
     session_id: str
     timestamp: str
     message: str
@@ -70,7 +70,7 @@ def list_logs(
         q = session.query(LogEntry)
 
         if entity:
-            q = q.filter(LogEntry.entity == entity)
+            q = q.filter(LogEntry.entity_type == entity)
         if level:
             q = q.filter(LogEntry.level.in_(levels_at_or_above(parse_level(level))))
         if session_id:

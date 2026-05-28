@@ -40,3 +40,8 @@ class SERVICE_TYPE(str, Enum):
     MEDICAL = "medical"
     FIRE = "fire"
     DISASTER_RELIEF = "disaster_relief"
+
+
+class ACCESS_LEVEL(str, Enum):
+    ADMIN = "admin"
+    USER = "user"

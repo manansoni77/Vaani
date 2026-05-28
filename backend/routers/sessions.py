@@ -7,7 +7,7 @@ from pydantic import BaseModel
 from sqlalchemy.orm import Session
 
 from database import CallSessionRecord
-from sessions import (
+from ..sessions import (
     HumanAgentSession,
     SessionBroadcaster,
     get_call,

@@ -1,11 +1,9 @@
 import asyncio
 import uuid
-from datetime import datetime, timezone
 
 from fastapi import APIRouter, WebSocket
 
-from database import save_call_session
-from sessions import CallSession, register_call, unregister_call
+from ..sessions import CallSession, register_call, unregister_call
 
 router = APIRouter()
 
@@ -32,32 +30,3 @@ async def call(websocket: WebSocket):
     finally:
         await unregister_call(session_id)
         session._emit_status("session_ended")
-        mem = session.dialogue_flow.semantic_memory
-        save_call_session(
-            session_id=session.session_id,
-            started_at=session.started_at,
-            ended_at=datetime.now(timezone.utc).isoformat(timespec="milliseconds"),
-            duration_s=round(session.loop.time() - session.session_start, 2),
-            phase=session.dialogue_flow.phase.value,
-            turns=session.dialogue_flow.turns,
-            sentiment=mem.sentiment.value,
-            urgency_level=mem.urgency_level.value,
-            human_requested=mem.human_requested,
-            transcript=session._format_transcript(),
-            audio_url=session.audio_url,
-            audio_mixed_url=session.audio_mixed_url,
-            summary=mem.summary,
-            intent=mem.intent,
-            key_details=mem.key_details,
-            system_score=(
-                session.dialogue_flow.system_score
-                if session.dialogue_flow.system_score is not None
-                else None
-            ),
-            user_score=(
-                session.dialogue_flow.user_score
-                if session.dialogue_flow.user_score is not None
-                else None
-            ),
-            query_type=mem.query_type.value if mem.query_type else None,
-        )
