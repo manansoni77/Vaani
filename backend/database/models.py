@@ -2,14 +2,14 @@ from sqlalchemy import Boolean, Column, Enum, Float, ForeignKey, Integer, String
 from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.orm import relationship
 from .engine import Base
-from constants import ACCESS_LEVEL
+from constants import ROLE_TYPE
 
 
 class Role(Base):
     __tablename__ = "roles"
     id = Column(Integer, primary_key=True, autoincrement=True)
-    department_name = Column(String, nullable=True)
-    access_level = Column(Enum(ACCESS_LEVEL), nullable=False)
+    role_type = Column(Enum(ROLE_TYPE), nullable=False)          # explicit role — no magic string checks needed
+    department_name = Column(String, nullable=True)              # null for IT_ADMIN / SUPER_ADMIN; display name for all others
     staff_users = relationship("StaffUser", back_populates="role")
 
 
