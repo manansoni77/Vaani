@@ -24,6 +24,7 @@ class CallSession:
     loop: asyncio.AbstractEventLoop
     session_start: float
     phone_number: str = "unknown"           # added: caller's phone number
+    # conversationState: ConversationState
 
     audio_chunks: list[bytes] = field(default_factory=list)
     tts_events: list[tuple[float, bytes]] = field(default_factory=list)
@@ -252,6 +253,8 @@ class CallSession:
                     self.audio_chunks.append(chunk)
                     if not VAD_GATE_STT or self._speaking:
                         await self.audio_queue.put(chunk)
+                    # else:
+                    #     self.call_log.debug("VAD gate active — audio chunk dropped")
                     if self.human_agent_ws is not None:
                         try:
                             await self.human_agent_ws.send_bytes(chunk)
@@ -282,7 +285,9 @@ class CallSession:
                 )
 
     def _interrupt_if_processing(self) -> None:
+        """Cancel in-flight LLM/TTS processing when user starts speaking again."""
         if self._process_task and not self._process_task.done():
+            # LLM still running — cancel and save text for combining on next flush
             self._interrupted_text = self._processing_text
             self._interrupted_lang = self._processing_lang
             self._process_task.cancel()
@@ -295,6 +300,7 @@ class CallSession:
                 f"processing interrupted — saved text: {self._interrupted_text!r}"
             )
         elif self._ai_speaking:
+            # LLM done, agent turn complete — stop TTS and process user reply as a fresh turn
             self._tts_stop = True
             self._drain_tts_queue()
             self._ai_speaking = False
@@ -317,6 +323,7 @@ class CallSession:
         if not self._pending_transcript_parts:
             if not self._interrupted_text:
                 return
+            # interrupted but no new transcript yet — reprocess the saved text as-is
             full_text = self._interrupted_text
             lang = self._interrupted_lang or "en-IN"
             self._interrupted_text = None
@@ -334,6 +341,7 @@ class CallSession:
                 self._interrupted_lang = None
                 self.call_log.info(f"combined with interrupted text: {full_text!r}")
 
+        # Allow TTS to run again for this new processing cycle
         self._tts_stop = False
         self.stt_log.info(f"speech ended — processing: {full_text!r}")
         user_turn = {
@@ -343,12 +351,18 @@ class CallSession:
         }
         self.conversation_turns.append(user_turn)
 
+        # lock only after first substantive CAPTURE turn completes
+        # dialogue_flow.turns increments after turn 1 is processed
         if not self._lang_locked:
             self.dialogue_flow.semantic_memory.user_language = lang
             self._lang_locked = True
             self.call_log.info(
                 f"language locked for session after first capture turn: {lang!r}"
             )
+        # elif not self._lang_locked:
+        # still in greeting/first turn — update but don't lock yet
+        # self.dialogue_flow.semantic_memory.user_language = lang
+        # self.call_log.info(f"language updated (not locked yet): {lang!r}")
         else:
             self.call_log.info(
                 f"language already locked as {self.dialogue_flow.semantic_memory.user_language!r} — ignoring {lang!r}"
@@ -377,6 +391,7 @@ class CallSession:
                 "processing cancelled — user spoke again; rolling back state"
             )
             self.dialogue_flow.restore_state(saved_state)
+            # Roll back language lock if this was the first turn
             if saved_state["semantic_memory"].user_language != lang:
                 self._lang_locked = False
                 self.call_log.info(
@@ -516,6 +531,12 @@ class CallSession:
     # ------------------------------------------------------------------ entry point
 
     async def _send_greeting(self) -> None:
+        """
+        Streams the fixed greeting via dialogue_flow.stream_greeting().
+        Fires automatically on session start — no user input needed.
+        stream_greeting() transitions GREETING → CAPTURE internally so the
+        first user message lands directly in CAPTURE.
+        """
         self.call_log.info("sending greeting")
         agent_parts: list[str] = []
 

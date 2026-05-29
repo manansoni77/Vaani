@@ -57,6 +57,7 @@ class DialogueFlow:
         """
         self.log.info("phase=GREETING generating greeting")
         self.phase = PHASE.CAPTURE
+        # transition immediately so we don't have to route the first user message specially
         yield "Hello! Thank you for calling Vaani. How can I assist you today?"
 
     async def get_response(self, input_text):
@@ -81,6 +82,7 @@ class DialogueFlow:
         prompt_fn = PROMPTS[self.phase]
 
         if self.phase == PHASE.GREETING:
+            # Safety fallback
             self.log.info(
                 "get_response called in GREETING phase — use stream_greeting(); falling back"
             )
@@ -105,6 +107,8 @@ class DialogueFlow:
 
             self.turns += 1
             self.system_score = response.system_score
+            # Preserve language through the rebuild — language is locked by session.py
+            # before this runs, and must survive SemanticMemory reconstruction every turn.
             locked_language = self.semantic_memory.user_language
             self.semantic_memory = SemanticMemory(
                 summary=response.summary,
@@ -114,7 +118,7 @@ class DialogueFlow:
                 sentiment=response.sentiment,
                 urgency_score=response.urgency_score,
                 human_requested=response.human_requested,
-                user_language=locked_language,
+                user_language=locked_language,  # preserved, not overwritten by LLM
                 query_type=response.query_type,
                 service_type=response.service_type,
                 location=response.location,
@@ -161,6 +165,7 @@ class DialogueFlow:
                 f"VALIDATION scores — system={self.system_score:.2f} user={self.user_score:.2f}"
             )
 
+            # Adding a follow up loop in Validation phase
             if self.first_validate:
                 self.first_validate = False
                 yield response.response
@@ -184,5 +189,6 @@ class DialogueFlow:
                         }
                         yield escalate.get(self.semantic_memory.user_language, escalate["en-IN"])
                 else:
+                    # User denied or was unclear - stay in VALIDATION and ask again
                     self.log.info("User denied or unclear - staying in VALIDATION for follow-up")
                     yield response.response
