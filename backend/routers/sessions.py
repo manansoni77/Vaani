@@ -6,11 +6,17 @@ from fastapi import APIRouter, HTTPException, Query, WebSocket, WebSocketDisconn
 from pydantic import BaseModel
 from sqlalchemy.orm import Session
 
-import session_registry
-from constants import LOG_ENTITIES, QUERY_TYPE
-from human_session import HumanAgentSession
-from logger import CallSessionRecord, get_engine, get_logger
-from session_broadcaster import SessionBroadcaster
+from database import CallSessionRecord
+from constants import QUERY_TYPE
+from sessions import (
+    HumanAgentSession,
+    SessionBroadcaster,
+    get_call,
+    register_human,
+    unregister_human,
+)
+from database import get_engine
+from loggers import get_logger, LOG_ENTITIES
 
 router = APIRouter(prefix="/sessions", tags=["sessions"])
 _log = get_logger(LOG_ENTITIES.APP)
@@ -19,23 +25,27 @@ _log = get_logger(LOG_ENTITIES.APP)
 class CallSessionOut(BaseModel):
     id: int
     session_id: str
+    ticket_id: int | None = None
+    caller_id: int | None = None
+    taken_over_by: int | None = None
     started_at: str
     ended_at: str
     duration_s: float
     phase: str
+    language: str | None = None
+    system_score: float | None = None    # was agent_confidence
+    user_score: float | None = None      # was user_confidence
+    urgency_score: float | None = None   # was urgency_level
     turns: int
     sentiment: str
-    urgency_level: str
-    human_requested: bool
     transcript: str
+    query_type: str | None = None
+    human_requested: bool
     audio_url: str | None = None
     audio_mixed_url: str | None = None
     summary: str | None = None
     intent: str | None = None
     key_details: str | None = None
-    agent_confidence: str | None = None
-    user_confidence: str | None = None
-    query_type: str | None = None
 
     model_config = {"from_attributes": True}
 
@@ -52,7 +62,7 @@ def list_completed_sessions(
     ),
     query_type: QUERY_TYPE | None = Query(
         default=None,
-        description="Filter by query type: EMERGENCY, MUNICIPALITY, or GENERAL",
+        description="Filter by query type: GRIEVANCE, ENQUIRY, or OTHERS",
     ),
     limit: int = Query(default=20, ge=1, le=1000),
     offset: int = Query(default=0, ge=0),
@@ -110,7 +120,7 @@ class TakeoverRequest(BaseModel):
 @router.post("/{session_id}/takeover")
 async def takeover_session(session_id: str, body: TakeoverRequest) -> dict:
     """Claim a live call session for human handling. Only one agent can claim at a time."""
-    session = session_registry.get_call(session_id)
+    session = get_call(session_id)
     if session is None:
         raise HTTPException(status_code=404, detail="session not found or not active")
     if session.human_takeover:
@@ -136,7 +146,7 @@ async def human_agent_audio(
     Audio is forwarded live to the caller; VAD false flushes a 'human:' transcript turn.
     """
     await websocket.accept()
-    session = session_registry.get_call(session_id)
+    session = get_call(session_id)
     if session is None:
         await websocket.close(code=4004, reason="session not found")
         return
@@ -144,8 +154,8 @@ async def human_agent_audio(
         await websocket.close(code=4003, reason="not authorized")
         return
     human_session = HumanAgentSession(call_session=session, agent_websocket=websocket)
-    session_registry.register_human(session_id, human_session)
+    register_human(session_id, human_session)
     try:
         await human_session.run()
     finally:
-        await session_registry.unregister_human(session_id)
+        await unregister_human(session_id)
