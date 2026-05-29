@@ -1,6 +1,6 @@
 from typing import List
 from pydantic import BaseModel, Field
-from constants import CONFIDENCE_LEVEL, SENTIMENT, URGENCY_LEVEL, QUERY_TYPE, SERVICE_TYPE
+from constants import SENTIMENT, QUERY_TYPE, SERVICE_TYPE
 
 
 class SemanticMemory(BaseModel):
@@ -15,7 +15,7 @@ class SemanticMemory(BaseModel):
     key_details: str = ""
     contradictions: List[str] = []
     sentiment: SENTIMENT = SENTIMENT.NEUTRAL
-    urgency_level: URGENCY_LEVEL = URGENCY_LEVEL.NONE
+    urgency_score: float = Field(default=0.0, ge=0.0, le=1.0)  # 0–0.33 low, 0.33–0.66 medium, 0.66–1.0 high
     human_requested: bool = False
     query_type: QUERY_TYPE | None = None
     service_type: SERVICE_TYPE | None = None  # EMERGENCY only
@@ -28,9 +28,9 @@ class CaptureAndValidationResponse(SemanticMemory):
     response: str = Field(..., description="The agent's response to the user input for this turn, must not be empty.")
     follow_up: bool
     reiterate: bool  # only used in VALIDATION phase to indicate if the summary should be reiterated with corrections
-    agent_confidence: CONFIDENCE_LEVEL
-    user_confidence: CONFIDENCE_LEVEL
+    system_score: float = Field(..., ge=0.0, le=1.0, description="Agent confidence: 0–0.33 red (unclear), 0.33–0.66 yellow (partial), 0.66–1.0 green (complete).")
+    user_score: float = Field(..., ge=0.0, le=1.0, description="User confidence/satisfaction: 0–0.33 red, 0.33–0.66 yellow, 0.66–1.0 green.")
 
 
 class DecisionResponse(BaseModel):
-    user_confidence: CONFIDENCE_LEVEL
+    user_score: float = Field(..., ge=0.0, le=1.0, description="User confirmation confidence: 0–0.33 red (denied/unclear), 0.33–0.66 yellow, 0.66–1.0 green (confirmed).")

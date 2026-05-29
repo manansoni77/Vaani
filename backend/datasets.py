@@ -1,14 +1,14 @@
-
 from sqlalchemy import and_
 from database import CallSessionRecord
+
 
 def _nonnull(*columns: str):
     parts = []
     for col in columns:
         attr = getattr(CallSessionRecord, col)
         parts.append(attr.isnot(None))
-        parts.append(attr != "")
     return and_(*parts)
+
 
 DATASETS: dict[str, dict] = {
     "summarization": {
@@ -40,31 +40,31 @@ DATASETS: dict[str, dict] = {
         "filter": lambda: _nonnull("transcript"),
     },
     "urgency_detection": {
-        "description": "Transcript → urgency level (none / low / medium / high).",
+        "description": "Transcript → urgency score (0.0–1.0).",
         "input_columns": ["transcript"],
-        "output_columns": ["urgency_level"],
-        "model_type": "classification",
-        "filter": lambda: _nonnull("transcript"),
+        "output_columns": ["urgency_score"],
+        "model_type": "regression",
+        "filter": lambda: _nonnull("transcript", "urgency_score"),
     },
     "escalation_prediction": {
         "description": "Transcript + call metadata → human escalation flag for proactive routing.",
-        "input_columns": ["transcript", "phase", "turns", "sentiment", "urgency_level"],
+        "input_columns": ["transcript", "phase", "turns", "sentiment"],
         "output_columns": ["human_requested"],
         "model_type": "classification",
         "filter": lambda: _nonnull("transcript"),
     },
-    "agent_confidence_calibration": {
-        "description": "Transcript → agent confidence (GREEN / YELLOW / RED) for self-assessment fine-tuning.",
+    "system_confidence_calibration": {
+        "description": "Transcript → system confidence score (0.0–1.0) for self-assessment fine-tuning.",
         "input_columns": ["transcript"],
-        "output_columns": ["agent_confidence"],
-        "model_type": "classification",
-        "filter": lambda: _nonnull("transcript", "agent_confidence"),
+        "output_columns": ["system_score"],
+        "model_type": "regression",
+        "filter": lambda: _nonnull("transcript", "system_score"),
     },
     "dialogue_quality": {
-        "description": "Transcript + call metadata → user confidence as an implicit RLHF reward signal.",
+        "description": "Transcript + call metadata → user confidence score as an implicit RLHF reward signal.",
         "input_columns": ["transcript", "phase", "turns"],
-        "output_columns": ["user_confidence"],
+        "output_columns": ["user_score"],
         "model_type": "reward",
-        "filter": lambda: _nonnull("transcript", "user_confidence"),
+        "filter": lambda: _nonnull("transcript", "user_score"),
     },
 }

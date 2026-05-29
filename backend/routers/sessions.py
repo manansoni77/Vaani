@@ -25,23 +25,27 @@ _log = get_logger(LOG_ENTITIES.APP)
 class CallSessionOut(BaseModel):
     id: int
     session_id: str
+    ticket_id: int | None = None
+    caller_id: int | None = None
+    taken_over_by: int | None = None
     started_at: str
     ended_at: str
     duration_s: float
     phase: str
+    language: str | None = None
+    system_score: float | None = None    # was agent_confidence
+    user_score: float | None = None      # was user_confidence
+    urgency_score: float | None = None   # was urgency_level
     turns: int
     sentiment: str
-    urgency_level: str
-    human_requested: bool
     transcript: str
+    query_type: str | None = None
+    human_requested: bool
     audio_url: str | None = None
     audio_mixed_url: str | None = None
     summary: str | None = None
     intent: str | None = None
     key_details: str | None = None
-    agent_confidence: str | None = None
-    user_confidence: str | None = None
-    query_type: str | None = None
 
     model_config = {"from_attributes": True}
 
@@ -58,7 +62,7 @@ def list_completed_sessions(
     ),
     query_type: QUERY_TYPE | None = Query(
         default=None,
-        description="Filter by query type: EMERGENCY, MUNICIPALITY, or GENERAL",
+        description="Filter by query type: GRIEVANCE, ENQUIRY, or OTHERS",
     ),
     limit: int = Query(default=20, ge=1, le=1000),
     offset: int = Query(default=0, ge=0),

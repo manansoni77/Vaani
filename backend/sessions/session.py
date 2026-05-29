@@ -13,8 +13,8 @@ from ai_services import DialogueFlow
 from ai_services.stt_tts import get_caller_stt_client, get_tts_client
 from ai_services.stt_tts.base import BaseTTSClient
 from loggers import get_logger, LOG_ENTITIES
+from database import save_call_session
 from .broadcaster import SessionBroadcaster, build_status
-
 
 
 @dataclass
@@ -23,6 +23,7 @@ class CallSession:
     websocket: WebSocket
     loop: asyncio.AbstractEventLoop
     session_start: float
+    phone_number: str = "unknown"           # added: caller's phone number
     # conversationState: ConversationState
 
     audio_chunks: list[bytes] = field(default_factory=list)
@@ -92,14 +93,12 @@ class CallSession:
             duration_s=self.loop.time() - self.session_start,
             turns=df.turns,
             sentiment=mem.sentiment.value,
-            urgency_level=mem.urgency_level.value,
+            urgency_score=mem.urgency_score,
             human_requested=mem.human_requested,
             transcript=transcript,
             summary=mem.summary,
             intent=mem.intent,
             key_details=mem.key_details,
-            agent_confidence=df.agent_confidence.value if df.agent_confidence else None,
-            user_confidence=df.user_confidence.value if df.user_confidence else None,
             human_takeover=self.human_takeover,
             claimed_by=self.claimed_by,
             query_type=mem.query_type.value if mem.query_type else None,
@@ -250,19 +249,17 @@ class CallSession:
                     self.call_log.info("websocket.disconnect received")
                     break
                 if message.get("bytes"):
-                    # print('receiving audio...')
                     chunk = message["bytes"]
                     self.audio_chunks.append(chunk)
                     if not VAD_GATE_STT or self._speaking:
                         await self.audio_queue.put(chunk)
+                    # else:
+                    #     self.call_log.debug("VAD gate active — audio chunk dropped")
                     if self.human_agent_ws is not None:
-                        # print('forwarding audio to human agent...')
                         try:
                             await self.human_agent_ws.send_bytes(chunk)
                         except Exception:
                             self.human_agent_ws = None
-                    # else:
-                    #     self.call_log.debug("VAD gate active — audio chunk dropped")
                 elif message.get("text"):
                     self._handle_text_message(message["text"])
         except WebSocketDisconnect:
@@ -277,7 +274,6 @@ class CallSession:
         if vad.get("type") == "vad":
             was_speaking = self._speaking
             self._speaking = bool(vad.get("speaking"))
-            # self.call_log.debug(f"VAD: speaking={self._speaking}")
             if was_speaking != self._speaking:
                 self._emit_status("session_updated")
             if not was_speaking and self._speaking:
@@ -347,7 +343,6 @@ class CallSession:
 
         # Allow TTS to run again for this new processing cycle
         self._tts_stop = False
-
         self.stt_log.info(f"speech ended — processing: {full_text!r}")
         user_turn = {
             "role": "user",
@@ -402,7 +397,6 @@ class CallSession:
                 self.call_log.info(
                     "language lock rolled back due to cancellation on first turn"
                 )
-
             for i, turn in enumerate(self.conversation_turns):
                 if turn is user_turn:
                     del self.conversation_turns[i]
@@ -454,6 +448,7 @@ class CallSession:
             self.stt_log.info("no transcript produced")
 
         await self._save_audio()
+        await self._save_to_db()          # added: was missing entirely
 
     @staticmethod
     async def _await_task(handle: asyncio.Task | None, timeout: float, log) -> None:
@@ -500,8 +495,38 @@ class CallSession:
                         self.call_log.info(f"mixed audio uploaded: {mixed_url}")
         except Exception as e:
             import traceback
-
             self.call_log.error(f"audio upload failed: {e!r}\n{traceback.format_exc()}")
+
+    async def _save_to_db(self) -> None:
+        mem = self.dialogue_flow.semantic_memory
+        df = self.dialogue_flow
+        ended_at = datetime.now(timezone.utc).isoformat(timespec="milliseconds")
+        duration_s = self.loop.time() - self.session_start
+
+        save_call_session(
+            session_id=self.session_id,
+            phone_number=self.phone_number,
+            started_at=self.started_at,
+            ended_at=ended_at,
+            duration_s=duration_s,
+            phase=df.phase.value,
+            turns=df.turns,
+            sentiment=mem.sentiment.value,
+            transcript=self._format_transcript(),
+            query_type=mem.query_type.value if mem.query_type else None,
+            language=mem.user_language,
+            system_score=df.system_score,
+            user_score=df.user_score,
+            urgency_score=mem.urgency_score,
+            human_requested=mem.human_requested,
+            audio_url=self.audio_url,
+            audio_mixed_url=self.audio_mixed_url,
+            summary=mem.summary,
+            intent=mem.intent,
+            key_details=str(mem.key_details) if mem.key_details else None,
+            routed_department=mem.service_type.value if mem.service_type else None,
+        )
+        self.call_log.info("session saved to db")
 
     # ------------------------------------------------------------------ entry point
 

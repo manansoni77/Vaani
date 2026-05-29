@@ -30,9 +30,9 @@ class URGENCY_LEVEL(str, Enum):
 
 
 class QUERY_TYPE(str, Enum):
-    EMERGENCY = "EMERGENCY"
-    MUNICIPALITY = "MUNICIPALITY"
-    GENERAL = "GENERAL"
+    GRIEVANCE = "GRIEVANCE"
+    ENQUIRY = "ENQUIRY"
+    OTHERS = "OTHERS"
 
 
 class SERVICE_TYPE(str, Enum):
@@ -40,3 +40,8 @@ class SERVICE_TYPE(str, Enum):
     MEDICAL = "medical"
     FIRE = "fire"
     DISASTER_RELIEF = "disaster_relief"
+
+
+class ACCESS_LEVEL(str, Enum):
+    ADMIN = "admin"
+    USER = "user"
