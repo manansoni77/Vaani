@@ -8,10 +8,9 @@ import {
   useCallback,
 } from "react";
 import { useAuth } from "@/contexts/AuthContext";
-import { decodeGoogleJwt } from "@/lib/auth";
-import { setApiToken } from "@/lib/apiClient";
-import type { UserProfile, BackendUserProfile } from "@/lib/userStore";
-import { USER_STORAGE_KEY, MOCK_BACKEND_PROFILE } from "@/lib/userStore";
+import { setApiToken, apiFetch } from "@/lib/apiClient";
+import type { UserProfile, BackendUserResponse } from "@/lib/userStore";
+import { USER_STORAGE_KEY, mapBackendUser } from "@/lib/userStore";
 
 // ---------------------------------------------------------------------------
 // Context type
@@ -21,7 +20,7 @@ type UserContextType = {
   profile: UserProfile | null;
   isLoading: boolean;
   error: string | null;
-  /** Re-fetch the profile from the API and refresh localStorage. */
+  /** Re-fetch the profile from GET /users/me and refresh localStorage. */
   refetch: () => Promise<void>;
 };
 
@@ -37,34 +36,18 @@ export function UserProvider({ children }: { children: React.ReactNode }) {
   const [isLoading, setIsLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
-  // ── Keep the API client token in sync with auth state ──────────────────
+  // Keep the API client token in sync with auth state
   useEffect(() => {
-    setApiToken(user?.googleCredential ?? null);
+    setApiToken(user?.accessToken ?? null);
   }, [user]);
 
-  // ── Fetch profile from API (or mock) ───────────────────────────────────
   const fetchProfile = useCallback(async () => {
     if (!user) return;
     setIsLoading(true);
     setError(null);
     try {
-      // TODO: uncomment when the backend endpoint is ready and remove the mock block below.
-      // const backendData = await apiFetch<BackendUserProfile>("/users/me");
-
-      // ── Mock: build backend slice locally ───────────────────────────────
-      const backendData: BackendUserProfile = MOCK_BACKEND_PROFILE;
-      // ────────────────────────────────────────────────────────────────────
-
-      // Merge JWT identity fields with backend org/access data
-      const jwtPayload = decodeGoogleJwt(user.googleCredential);
-      const merged: UserProfile = {
-        name: jwtPayload?.name ?? "",
-        email: jwtPayload?.email ?? "",
-        googleId: jwtPayload?.sub ?? "",
-        picture: jwtPayload?.picture,
-        ...backendData,
-      };
-
+      const data = await apiFetch<BackendUserResponse>("/users/me");
+      const merged = mapBackendUser(data, user.picture);
       localStorage.setItem(USER_STORAGE_KEY, JSON.stringify(merged));
       setProfile(merged);
     } catch (e) {
@@ -74,10 +57,9 @@ export function UserProvider({ children }: { children: React.ReactNode }) {
     }
   }, [user]);
 
-  // ── On auth change: rehydrate from cache, then refresh from API ─────────
+  // On auth change: rehydrate from cache first, then refresh from API
   useEffect(() => {
     if (!user) {
-      // Logged out — clear everything
       setProfile(null);
       localStorage.removeItem(USER_STORAGE_KEY);
       return;

@@ -1,62 +1,85 @@
 // ---------------------------------------------------------------------------
-// User profile types
+// Shared types
 // ---------------------------------------------------------------------------
+
+export type RoleType =
+  | "it_admin"
+  | "super_admin"
+  | "call_center_admin"
+  | "call_center_user"
+  | "dept_admin"
+  | "dept_user";
 
 export type AdminContact = {
   name: string;
   email: string;
 };
 
-/** Full user profile — sourced from the backend /users/me endpoint.
- *  Fields from the Google JWT (name, email, googleId, picture) are merged in
- *  by UserContext so the consumer always gets one unified object.
- */
-export type UserProfile = {
-  // ── Identity (from Google JWT) ─────────────────────────────────────────
+// ---------------------------------------------------------------------------
+// Backend response shape — mirrors GET /users/me exactly
+// ---------------------------------------------------------------------------
+
+export type BackendUserResponse = {
+  id: number;
   name: string;
   email: string;
-  googleId: string;
-  picture?: string;
-
-  // ── Org data (from backend) ────────────────────────────────────────────
-  department: string;
-  accessLevel: string;
-  userSince: string; // ISO date string, e.g. "2024-03-15"
-
-  // ── Admin hierarchy (from backend) ────────────────────────────────────
-  deptAdmin: AdminContact;
-  itAdmin: AdminContact;
-  superAdmin: AdminContact;
+  google_sub: string;
+  role_type: RoleType;
+  department_name: string | null; // null for it_admin / super_admin
+  active: boolean;
+  created_at: string;             // ISO datetime string
+  last_login_at: string | null;
+  dept_admin: AdminContact | null;
+  it_admin: AdminContact | null;
+  super_admin: AdminContact | null;
 };
 
 // ---------------------------------------------------------------------------
-// Storage
+// Frontend model — camelCase, picture merged in from Google JWT
+// ---------------------------------------------------------------------------
+
+export type UserProfile = {
+  // ── Identity ───────────────────────────────────────────────────────────
+  name: string;
+  email: string;
+  googleId: string;
+  picture?: string;           // not in DB — captured from Google JWT at sign-in
+
+  // ── Org ────────────────────────────────────────────────────────────────
+  department: string | null;  // null for it_admin / super_admin
+  accessLevel: RoleType;
+  userSince: string;          // ISO datetime string
+
+  // ── Admin hierarchy ────────────────────────────────────────────────────
+  deptAdmin: AdminContact | null;   // null when no dept admin exists or caller has no dept
+  itAdmin: AdminContact | null;
+  superAdmin: AdminContact | null;
+};
+
+// ---------------------------------------------------------------------------
+// Storage key
 // ---------------------------------------------------------------------------
 
 export const USER_STORAGE_KEY = "vaani_user_profile";
 
 // ---------------------------------------------------------------------------
-// Mock data — replace the commented block in UserContext.fetchProfile()
-// with a real apiFetch call once the endpoint exists.
+// Map backend response → frontend model
 // ---------------------------------------------------------------------------
 
-/** The slice of UserProfile that comes from the backend (not the JWT). */
-export type BackendUserProfile = Omit<UserProfile, "name" | "email" | "googleId" | "picture">;
-
-export const MOCK_BACKEND_PROFILE: BackendUserProfile = {
-  department: "Emergency Response Unit",
-  accessLevel: "Operator",
-  userSince: "2024-03-15",
-  deptAdmin: {
-    name: "Priya Sharma",
-    email: "priya.sharma@vaani.gov.in",
-  },
-  itAdmin: {
-    name: "Rohan Mehta",
-    email: "rohan.mehta@vaani.gov.in",
-  },
-  superAdmin: {
-    name: "Ananya Iyer",
-    email: "ananya.iyer@vaani.gov.in",
-  },
-};
+export function mapBackendUser(
+  data: BackendUserResponse,
+  picture: string | undefined,
+): UserProfile {
+  return {
+    name: data.name,
+    email: data.email,
+    googleId: data.google_sub,
+    picture,
+    department: data.department_name,
+    accessLevel: data.role_type,
+    userSince: data.created_at,
+    deptAdmin: data.dept_admin,
+    itAdmin: data.it_admin,
+    superAdmin: data.super_admin,
+  };
+}

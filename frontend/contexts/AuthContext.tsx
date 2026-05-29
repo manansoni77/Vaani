@@ -8,16 +8,26 @@ import {
   useCallback,
 } from "react";
 import type { AuthUser } from "@/lib/auth";
-import { AUTH_STORAGE_KEY } from "@/lib/auth";
+import { AUTH_STORAGE_KEY, decodeGoogleJwt } from "@/lib/auth";
+import { API_BASE } from "@/lib/config";
 
 // ---------------------------------------------------------------------------
 // Types
 // ---------------------------------------------------------------------------
 
+type TokenResponse = {
+  access_token: string;
+  token_type: string;
+  expires_in: number;
+};
+
 type AuthContextType = {
   user: AuthUser | null;
-  /** Call with the Google credential JWT after a successful sign-in. */
-  login: (googleCredential: string) => void;
+  /**
+   * Exchange a Google credential for an app JWT via POST /auth/google.
+   * Throws with a human-readable message on failure (401 / 403 / network).
+   */
+  login: (googleCredential: string) => Promise<void>;
   logout: () => void;
   /** True while reading persisted auth from localStorage on first mount. */
   isLoading: boolean;
@@ -42,8 +52,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     try {
       const raw = localStorage.getItem(AUTH_STORAGE_KEY);
       if (raw) {
-        const stored = JSON.parse(raw) as AuthUser;
-        setUser(stored);
+        setUser(JSON.parse(raw) as AuthUser);
       }
     } catch {
       localStorage.removeItem(AUTH_STORAGE_KEY);
@@ -52,12 +61,28 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     }
   }, []);
 
-  const login = useCallback((googleCredential: string) => {
-    console.log("[Auth] Google credential received:", googleCredential);
+  const login = useCallback(async (googleCredential: string) => {
+    // Capture picture from the Google JWT before discarding the credential
+    const picture = decodeGoogleJwt(googleCredential)?.picture;
 
-    // TODO: exchange googleCredential for an application token here.
-    // For now, just persist the raw Google JWT.
-    const authUser: AuthUser = { googleCredential };
+    const res = await fetch(`${API_BASE}/auth/google`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ credential: googleCredential }),
+    });
+
+    if (!res.ok) {
+      const text = await res.text().catch(() => "");
+      const reason =
+        res.status === 401 ? "Invalid Google credential." :
+        res.status === 403 ? "Account not provisioned or inactive. Contact your admin." :
+        `Sign-in failed (${res.status})${text ? `: ${text}` : ""}.`;
+      throw new Error(reason);
+    }
+
+    const { access_token } = (await res.json()) as TokenResponse;
+
+    const authUser: AuthUser = { accessToken: access_token, picture };
     localStorage.setItem(AUTH_STORAGE_KEY, JSON.stringify(authUser));
     setUser(authUser);
   }, []);

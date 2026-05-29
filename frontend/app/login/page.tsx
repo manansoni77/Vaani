@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect } from "react";
+import { useState, useEffect } from "react";
 import { useRouter } from "next/navigation";
 import { GoogleLogin } from "@react-oauth/google";
 import { useAuth } from "@/contexts/AuthContext";
@@ -8,11 +8,26 @@ import { useAuth } from "@/contexts/AuthContext";
 export default function LoginPage() {
   const { user, login } = useAuth();
   const router = useRouter();
+  const [error, setError] = useState<string | null>(null);
+  const [loggingIn, setLoggingIn] = useState(false);
 
   // Already logged in — go home
   useEffect(() => {
     if (user) router.replace("/");
   }, [user, router]);
+
+  async function handleGoogleSuccess(credential: string) {
+    setError(null);
+    setLoggingIn(true);
+    try {
+      await login(credential);
+      // AuthContext sets user → useEffect above redirects to /
+    } catch (e) {
+      setError(e instanceof Error ? e.message : "Sign-in failed. Please try again.");
+    } finally {
+      setLoggingIn(false);
+    }
+  }
 
   return (
     <div className="min-h-screen flex items-center justify-center bg-linear-to-br from-blue-50 to-indigo-100 dark:from-slate-900 dark:to-slate-800 p-4">
@@ -33,17 +48,29 @@ export default function LoginPage() {
             Use your organisation Google account to continue.
           </p>
 
-          <GoogleLogin
-            onSuccess={(response) => {
-              if (response.credential) {
-                login(response.credential);
-              }
-            }}
-            onError={() => {
-              console.error("[Auth] Google sign-in failed");
-            }}
-            useOneTap
-          />
+          {loggingIn ? (
+            <div className="flex items-center gap-2 text-sm text-slate-500 dark:text-slate-400">
+              <span className="w-4 h-4 border-2 border-slate-300 border-t-indigo-600 rounded-full animate-spin" />
+              Signing in…
+            </div>
+          ) : (
+            <GoogleLogin
+              onSuccess={(response) => {
+                if (response.credential) {
+                  handleGoogleSuccess(response.credential);
+                }
+              }}
+              onError={() => {
+                setError("Google sign-in failed. Please try again.");
+              }}
+            />
+          )}
+
+          {error && (
+            <p className="text-sm text-red-500 dark:text-red-400 text-center">
+              {error}
+            </p>
+          )}
         </div>
       </div>
     </div>

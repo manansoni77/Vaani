@@ -25,12 +25,10 @@ function InfoRow({ label, value }: { label: string; value: string }) {
 
 function AdminRow({
   role,
-  name,
-  email,
+  contact,
 }: {
   role: string;
-  name: string;
-  email: string;
+  contact: { name: string; email: string } | null;
 }) {
   return (
     <div className="flex items-start justify-between gap-4 py-3 border-b border-slate-100 dark:border-slate-700 last:border-0">
@@ -38,19 +36,29 @@ function AdminRow({
         <span className="text-xs font-medium text-slate-400 dark:text-slate-500 uppercase tracking-wide">
           {role}
         </span>
-        <span className="text-sm font-semibold text-slate-800 dark:text-slate-200">
-          {name}
-        </span>
-        <span className="text-xs text-slate-500 dark:text-slate-400 truncate">
-          {email}
-        </span>
+        {contact ? (
+          <>
+            <span className="text-sm font-semibold text-slate-800 dark:text-slate-200">
+              {contact.name}
+            </span>
+            <span className="text-xs text-slate-500 dark:text-slate-400 truncate">
+              {contact.email}
+            </span>
+          </>
+        ) : (
+          <span className="text-sm text-slate-400 dark:text-slate-500 italic">
+            Not assigned
+          </span>
+        )}
       </div>
-      <a
-        href={`mailto:${email}`}
-        className="shrink-0 px-3 py-1.5 text-xs font-semibold bg-slate-100 hover:bg-slate-200 dark:bg-slate-700 dark:hover:bg-slate-600 text-slate-600 dark:text-slate-300 rounded-lg transition-colors mt-1"
-      >
-        Email
-      </a>
+      {contact && (
+        <a
+          href={`mailto:${contact.email}`}
+          className="shrink-0 px-3 py-1.5 text-xs font-semibold bg-slate-100 hover:bg-slate-200 dark:bg-slate-700 dark:hover:bg-slate-600 text-slate-600 dark:text-slate-300 rounded-lg transition-colors mt-1"
+        >
+          Email
+        </a>
+      )}
     </div>
   );
 }
@@ -161,21 +169,9 @@ export default function UserPage() {
           <div className="flex flex-col">
             {profile ? (
               <>
-                <AdminRow
-                  role="Department Admin"
-                  name={profile.deptAdmin.name}
-                  email={profile.deptAdmin.email}
-                />
-                <AdminRow
-                  role="IT Admin"
-                  name={profile.itAdmin.name}
-                  email={profile.itAdmin.email}
-                />
-                <AdminRow
-                  role="Super Admin"
-                  name={profile.superAdmin.name}
-                  email={profile.superAdmin.email}
-                />
+                <AdminRow role="Department Admin" contact={profile.deptAdmin} />
+                <AdminRow role="IT Admin" contact={profile.itAdmin} />
+                <AdminRow role="Super Admin" contact={profile.superAdmin} />
               </>
             ) : (
               <div className="py-4 text-sm text-slate-400">Loading…</div>
