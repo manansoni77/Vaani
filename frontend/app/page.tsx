@@ -2,12 +2,10 @@
 
 import Image from "next/image";
 import Link from "next/link";
-import { useAuth } from "@/contexts/AuthContext";
-import { decodeGoogleJwt } from "@/lib/auth";
+import { useUser } from "@/contexts/UserContext";
 
 export default function Home() {
-  const { user } = useAuth();
-  const profile = user ? decodeGoogleJwt(user.googleCredential) : null;
+  const { profile } = useUser();
 
   return (
     <div className="min-h-screen flex flex-col items-center justify-center bg-linear-to-br from-blue-50 to-indigo-100 dark:from-slate-900 dark:to-slate-800 p-4">
@@ -32,7 +30,7 @@ export default function Home() {
             </span>
           )}
           <span className="text-sm font-medium text-slate-700 dark:text-slate-300 hidden sm:block">
-            {profile?.given_name ?? profile?.name ?? "Profile"}
+            {profile?.name?.split(" ")[0] ?? "Profile"}
           </span>
         </Link>
       </div>

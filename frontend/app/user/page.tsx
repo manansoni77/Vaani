@@ -4,29 +4,7 @@ import Image from "next/image";
 import { useRouter } from "next/navigation";
 import Link from "next/link";
 import { useAuth } from "@/contexts/AuthContext";
-import { decodeGoogleJwt } from "@/lib/auth";
-
-// ---------------------------------------------------------------------------
-// Mock data — replace with API call when endpoint is ready
-// ---------------------------------------------------------------------------
-
-const MOCK_USER_DETAILS = {
-  department: "Emergency Response Unit",
-  accessLevel: "Operator",
-  userSince: "2024-03-15",
-  deptAdmin: {
-    name: "Priya Sharma",
-    email: "priya.sharma@vaani.gov.in",
-  },
-  itAdmin: {
-    name: "Rohan Mehta",
-    email: "rohan.mehta@vaani.gov.in",
-  },
-  superAdmin: {
-    name: "Ananya Iyer",
-    email: "ananya.iyer@vaani.gov.in",
-  },
-};
+import { useUser } from "@/contexts/UserContext";
 
 // ---------------------------------------------------------------------------
 // Small reusable pieces
@@ -82,20 +60,22 @@ function AdminRow({
 // ---------------------------------------------------------------------------
 
 export default function UserPage() {
-  const { user, logout } = useAuth();
+  const { logout } = useAuth();
+  const { profile, isLoading } = useUser();
   const router = useRouter();
-  const profile = user ? decodeGoogleJwt(user.googleCredential) : null;
-  const details = MOCK_USER_DETAILS;
-
-  const formattedUserSince = new Date(details.userSince).toLocaleDateString(
-    "en-IN",
-    { year: "numeric", month: "long", day: "numeric" },
-  );
 
   function handleLogout() {
     logout();
     router.replace("/login");
   }
+
+  const formattedUserSince = profile?.userSince
+    ? new Date(profile.userSince).toLocaleDateString("en-IN", {
+        year: "numeric",
+        month: "long",
+        day: "numeric",
+      })
+    : "—";
 
   return (
     <div className="min-h-screen bg-linear-to-br from-slate-50 to-slate-100 dark:from-slate-900 dark:to-slate-800 p-4 sm:p-8">
@@ -133,9 +113,13 @@ export default function UserPage() {
             </span>
           )}
           <div className="min-w-0">
-            <h1 className="text-xl font-bold text-slate-900 dark:text-white truncate">
-              {profile?.name ?? "—"}
-            </h1>
+            {isLoading && !profile ? (
+              <div className="h-5 w-40 bg-slate-200 dark:bg-slate-700 rounded animate-pulse mb-2" />
+            ) : (
+              <h1 className="text-xl font-bold text-slate-900 dark:text-white truncate">
+                {profile?.name ?? "—"}
+              </h1>
+            )}
             <p className="text-sm text-slate-500 dark:text-slate-400 truncate">
               {profile?.email ?? "—"}
             </p>
@@ -153,7 +137,7 @@ export default function UserPage() {
           <div className="grid grid-cols-1 sm:grid-cols-2 gap-5">
             <InfoRow label="Full Name" value={profile?.name ?? "—"} />
             <InfoRow label="Email Address" value={profile?.email ?? "—"} />
-            <InfoRow label="Google Account ID" value={profile?.sub ?? "—"} />
+            <InfoRow label="Google Account ID" value={profile?.googleId ?? "—"} />
             <InfoRow label="Member Since" value={formattedUserSince} />
           </div>
         </section>
@@ -164,8 +148,8 @@ export default function UserPage() {
             Department &amp; Access
           </h2>
           <div className="grid grid-cols-1 sm:grid-cols-2 gap-5">
-            <InfoRow label="Department" value={details.department} />
-            <InfoRow label="Access Level" value={details.accessLevel} />
+            <InfoRow label="Department" value={profile?.department ?? "—"} />
+            <InfoRow label="Access Level" value={profile?.accessLevel ?? "—"} />
           </div>
         </section>
 
@@ -175,21 +159,27 @@ export default function UserPage() {
             Admin Hierarchy
           </h2>
           <div className="flex flex-col">
-            <AdminRow
-              role="Department Admin"
-              name={details.deptAdmin.name}
-              email={details.deptAdmin.email}
-            />
-            <AdminRow
-              role="IT Admin"
-              name={details.itAdmin.name}
-              email={details.itAdmin.email}
-            />
-            <AdminRow
-              role="Super Admin"
-              name={details.superAdmin.name}
-              email={details.superAdmin.email}
-            />
+            {profile ? (
+              <>
+                <AdminRow
+                  role="Department Admin"
+                  name={profile.deptAdmin.name}
+                  email={profile.deptAdmin.email}
+                />
+                <AdminRow
+                  role="IT Admin"
+                  name={profile.itAdmin.name}
+                  email={profile.itAdmin.email}
+                />
+                <AdminRow
+                  role="Super Admin"
+                  name={profile.superAdmin.name}
+                  email={profile.superAdmin.email}
+                />
+              </>
+            ) : (
+              <div className="py-4 text-sm text-slate-400">Loading…</div>
+            )}
           </div>
         </section>
 
