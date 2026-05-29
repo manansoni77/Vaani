@@ -104,13 +104,17 @@ def google_auth(body: GoogleAuthRequest) -> TokenResponse:
             _log.warning(f"auth attempt from unprovisioned email={email!r}")
             raise HTTPException(status_code=403, detail="account not provisioned")
 
+        # 3. First login: backfill google_sub and auto-activate the pre-created account.
+        #    Admins provision accounts with active=False; the account becomes live only
+        #    once the user completes their first Google sign-in.
+        if user.google_sub is None:
+            user.google_sub = google_sub  # type: ignore
+            user.active = True            # type: ignore  # first-login activation
+
+        # 4. Block accounts explicitly deactivated by an admin after first login.
         if user.active is False:
             _log.warning(f"auth attempt from inactive user id={user.id}")
             raise HTTPException(status_code=403, detail="account is inactive")
-
-        # 3. Backfill google_sub on first login via email match
-        if user.google_sub is None:
-            user.google_sub = google_sub  # type: ignore
 
         user.last_login_at = datetime.now(timezone.utc).isoformat(timespec="milliseconds")  # type: ignore
         db.commit()
