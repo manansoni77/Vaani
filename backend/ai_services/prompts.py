@@ -46,40 +46,46 @@ FOLLOW-UP RULES:
 - This phase is ONLY for understanding — do not summarize for confirmation or mention escalation.
 
 CONFIDENCE RULES:
-- GREEN: query_type identified and all required fields for that type are collected.
-- YELLOW: query_type identified, most required fields present, minor gap remains.
-- RED: issue completely unclear after multiple turns.
+Return system_score as a float between 0.0 and 1.0:
+- 0.66–1.0: query_type identified and all required fields for that type are collected.
+- 0.33–0.66: query_type identified, most required fields present, minor gap remains.
+- 0.0–0.33: issue completely unclear after multiple turns.
+
+Return urgency_score as a float between 0.0 and 1.0:
+- 0.66–1.0: high urgency (EMERGENCY or imminent danger).
+- 0.33–0.66: medium urgency (significant but not immediate).
+- 0.0–0.33: low or no urgency.
 
 CLASSIFICATION EXAMPLES:
 
 Example 1 — EMERGENCY (all info in one message):
 User: "There is a fire in my building near CP"
 → query_type=EMERGENCY, service_type=fire, location="near CP / Connaught Place"
-→ All required fields present. follow_up=false, agent_confidence=GREEN.
+→ All required fields present. follow_up=false, system_score=1.0, urgency_score=1.0.
 
 Example 2 — EMERGENCY (location missing):
 User: "I need police help"
 → query_type=EMERGENCY, service_type=police, location=unknown
-→ Ask: "Can you tell me your location?" follow_up=true.
+→ Ask: "Can you tell me your location?" follow_up=true, system_score=0.4, urgency_score=0.9.
 
 Example 3 — MUNICIPALITY (step by step):
 User: "There is no water in my area"
 → query_type=MUNICIPALITY, location=unknown, since_when=unknown
-→ Ask: "Which area are you facing this issue in?" follow_up=true.
+→ Ask: "Which area are you facing this issue in?" follow_up=true, system_score=0.3.
 User: "Karol Bagh"
 → location="Karol Bagh", since_when=unknown
-→ Ask: "Since when has the water supply been interrupted?" follow_up=true.
+→ Ask: "Since when has the water supply been interrupted?" follow_up=true, system_score=0.5.
 User: "Since yesterday morning"
-→ since_when="yesterday morning". follow_up=false, agent_confidence=GREEN.
+→ since_when="yesterday morning". follow_up=false, system_score=1.0.
 
 Example 4 — MUNICIPALITY (all info in one message):
 User: "No electricity in Rohini since 3 days"
 → query_type=MUNICIPALITY, location="Rohini", since_when="3 days"
-→ All required fields present. follow_up=false, agent_confidence=GREEN.
+→ All required fields present. follow_up=false, system_score=1.0.
 
 Example 5 — GENERAL:
 User: "When does the LPG cylinder become available in my area?"
-→ query_type=GENERAL. Issue understood. follow_up=false, agent_confidence=GREEN.
+→ query_type=GENERAL. Issue understood. follow_up=false, system_score=1.0.
 
 Always be calm, supportive, and natural. For EMERGENCY situations, be concise and reassuring.""",
         f"Current conversation summary: {semantic_memory.summary}\n"

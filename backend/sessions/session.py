@@ -92,7 +92,7 @@ class CallSession:
             duration_s=self.loop.time() - self.session_start,
             turns=df.turns,
             sentiment=mem.sentiment.value,
-            urgency_level=mem.urgency_level.value,
+            urgency_score=mem.urgency_score,
             human_requested=mem.human_requested,
             transcript=transcript,
             summary=mem.summary,
@@ -488,9 +488,6 @@ class CallSession:
         ended_at = datetime.now(timezone.utc).isoformat(timespec="milliseconds")
         duration_s = self.loop.time() - self.session_start
 
-        _CONF_SCORE = {"GREEN": 1.0, "YELLOW": 0.5, "RED": 0.0}
-        _URGENCY_SCORE = {"none": 0.0, "low": 0.33, "medium": 0.66, "high": 1.0}
-
         save_call_session(
             session_id=self.session_id,
             phone_number=self.phone_number,
@@ -503,9 +500,9 @@ class CallSession:
             transcript=self._format_transcript(),
             query_type=mem.query_type.value if mem.query_type else None,
             language=mem.user_language,
-            system_score=_CONF_SCORE.get(df.system_score.value) if df.system_score else None,
-            user_score=_CONF_SCORE.get(df.user_score.value) if df.user_score else None,
-            urgency_score=_URGENCY_SCORE.get(mem.urgency_level.value) if mem.urgency_level else None,
+            system_score=df.system_score,
+            user_score=df.user_score,
+            urgency_score=mem.urgency_score,
             human_requested=mem.human_requested,
             audio_url=self.audio_url,
             audio_mixed_url=self.audio_mixed_url,

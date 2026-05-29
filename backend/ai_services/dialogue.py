@@ -1,11 +1,22 @@
 from typing import cast
 from .llm import LLMClient
-from constants import CONFIDENCE_LEVEL, PHASE
+from constants import PHASE
 from .schemas import CaptureAndValidationResponse, SemanticMemory
 from .prompts import PROMPTS
 from loggers import get_logger, LOG_ENTITIES
 
 llm_client = LLMClient()
+
+# Score thresholds — 0-0.33 red, 0.33-0.66 yellow, 0.66-1.0 green
+_RED_MAX = 0.33
+
+
+def _is_red(score: float | None) -> bool:
+    return score is None or score < _RED_MAX
+
+
+def _not_red(score: float | None) -> bool:
+    return score is not None and score >= _RED_MAX
 
 
 class DialogueFlow:
@@ -15,11 +26,9 @@ class DialogueFlow:
         self.phase = PHASE.GREETING
         self.semantic_memory = SemanticMemory()
         self.turns = 0
-        self.first_validate = (
-            True  # Flag to track if we're on the first validation turn
-        )
-        self.system_score: CONFIDENCE_LEVEL | None = None
-        self.user_score: CONFIDENCE_LEVEL | None = None
+        self.first_validate = True  # Flag to track if we're on the first validation turn
+        self.system_score: float | None = None
+        self.user_score: float | None = None
         self.log = get_logger(LOG_ENTITIES.DIALOGUE_FLOW, session_id=session_id)
         self.llm_log = get_logger(LOG_ENTITIES.OPENAI_LLM, session_id=session_id)
 
@@ -48,45 +57,30 @@ class DialogueFlow:
         """
         self.log.info("phase=GREETING generating greeting")
         self.phase = PHASE.CAPTURE
-        # transition immediately so we don't have to route the first user message specially
         yield "Hello! Thank you for calling Vaani. How can I assist you today?"
 
     async def get_response(self, input_text):
         if self.phase == PHASE.COMPLETE:
             self.log.info("get_response called in COMPLETE phase — ignoring")
 
-            if self.user_score in [
-                CONFIDENCE_LEVEL.GREEN,
-                CONFIDENCE_LEVEL.YELLOW,
-            ]:
+            if _not_red(self.user_score):
                 response = {
                     "hi-IN": "धन्यवाद पुष्टि करने के लिए। आपकी क्वेरी नोट कर ली गई है, हम इसे देखेंगे।",
                     "en-IN": "Thank you for confirming. Your query has been noted, we will look into it.",
                     "kn-IN": "ದೃಢೀಕರಿಸಿದಕ್ಕಾಗಿ ಧನ್ಯವಾದಗಳು. ನಿಮ್ಮ ಪ್ರಶ್ನೆಯನ್ನು ಗಮನಿಸಲಾಗಿದೆ, ನಾವು ಅದನ್ನು ನೋಡುತ್ತೇವೆ.",
                 }
-                if self.semantic_memory.user_language in response:
-                    yield response[self.semantic_memory.user_language]
-                else:
-                    yield response[
-                        "en-IN"
-                    ]  # default to english if language not in response mapping
-            elif self.user_score == CONFIDENCE_LEVEL.RED:
+                yield response.get(self.semantic_memory.user_language, response["en-IN"])
+            elif _is_red(self.user_score):
                 response = {
-                    "hi-IN": "मुझे bbbbbbbbb है, मैं आपकी समस्या को समझ नहीं पा रहा हूँ। कृपया मुझे एक पल दें, मैं आपको एक मानव एजेंट से जोड़ता हूँ।",
+                    "hi-IN": "मुझे खेद है, मैं आपकी समस्या को समझ नहीं पा रहा हूँ। कृपया मुझे एक पल दें, मैं आपको एक मानव एजेंट से जोड़ता हूँ।",
                     "en-IN": "Apologies, I'm having trouble understanding your issue. Please hold on, I'm connecting you to a human agent for better assistance.",
                     "kn-IN": "ಕ್ಷಮಿಸಿ, ನಿಮ್ಮ ಸಮಸ್ಯೆಯನ್ನು ನಾನು ಅರ್ಥಮಾಡಿಕೊಳ್ಳಲು ಕಷ್ಟಪಡುತ್ತಿದ್ದೇನೆ. ದಯವಿಟ್ಟು ಕಾಯಿರಿ, ನಾನು ನಿಮಗೆ ಉತ್ತಮ ಸಹಾಯಕ್ಕಾಗಿ ಮಾನವ ಏಜೆಂಟ್‌ಗೆ ಸಂಪರ್ಕಿಸುತ್ತಿದ್ದೇನೆ.",
                 }
-                if self.semantic_memory.user_language in response:
-                    yield response[self.semantic_memory.user_language]
-                else:
-                    yield response[
-                        "en-IN"
-                    ]  # default to english if language not in response mapping
+                yield response.get(self.semantic_memory.user_language, response["en-IN"])
 
         prompt_fn = PROMPTS[self.phase]
 
         if self.phase == PHASE.GREETING:
-            # Safety fallback
             self.log.info(
                 "get_response called in GREETING phase — use stream_greeting(); falling back"
             )
@@ -96,7 +90,7 @@ class DialogueFlow:
 
         elif self.phase == PHASE.CAPTURE:
             self.log.info(
-                f"phase=CAPTURE turn={self.turns + 1} input={input_text!r} lang={self.semantic_memory.user_language!r}    "
+                f"phase=CAPTURE turn={self.turns + 1} input={input_text!r} lang={self.semantic_memory.user_language!r}"
             )
             prompt = prompt_fn(input_text, self.semantic_memory)
             response = cast(
@@ -111,9 +105,6 @@ class DialogueFlow:
 
             self.turns += 1
             self.system_score = response.system_score
-            # Preserve language through the rebuild — language is locked by session.py
-            # before this runs, and must survive SemanticMemory reconstruction every turn.
-
             locked_language = self.semantic_memory.user_language
             self.semantic_memory = SemanticMemory(
                 summary=response.summary,
@@ -121,43 +112,34 @@ class DialogueFlow:
                 key_details=response.key_details,
                 contradictions=response.contradictions,
                 sentiment=response.sentiment,
-                urgency_level=response.urgency_level,
+                urgency_score=response.urgency_score,
                 human_requested=response.human_requested,
-                user_language=locked_language,  # preserved, not overwritten by LLM
+                user_language=locked_language,
                 query_type=response.query_type,
                 service_type=response.service_type,
                 location=response.location,
                 since_when=response.since_when,
             )
-            self.system_score = response.system_score
             self.log.info(
-                f"semantic_memory rebuilt — lang={locked_language!r} turns={self.turns}"
+                f"semantic_memory rebuilt — lang={locked_language!r} turns={self.turns} "
+                f"system_score={self.system_score:.2f} urgency_score={self.semantic_memory.urgency_score:.2f}"
             )
-            if self.turns >= self.max_turns or response.follow_up == False:
-                if response.system_score in [
-                    CONFIDENCE_LEVEL.GREEN,
-                    CONFIDENCE_LEVEL.YELLOW,
-                ]:
-                    yield response.response
 
+            if self.turns >= self.max_turns or not response.follow_up:
+                if _not_red(response.system_score):
+                    yield response.response
                     self.phase = PHASE.VALIDATION
-                    self.log.info(
-                        "phase transitioning to VALIDATION based on follow_up=false"
-                    )
-                elif response.system_score == CONFIDENCE_LEVEL.RED:
-                    respose = {
-                        "hi-IN": "मुझे aaaaaaa है, मैं आपकी समस्या को समझ नहीं पा रहा हूँ। कृपया मुझे एक पल दें, मैं आपको एक मानव एजेंट से जोड़ता हूँ।",
+                    self.log.info("phase transitioning to VALIDATION based on follow_up=false")
+                elif _is_red(response.system_score):
+                    escalate = {
+                        "hi-IN": "मुझे खेद है, मैं आपकी समस्या को समझ नहीं पा रहा हूँ। कृपया मुझे एक पल दें, मैं आपको एक मानव एजेंट से जोड़ता हूँ।",
                         "en-IN": "Apologies, I'm having trouble understanding your issue. Please hold on, I'm connecting you to a human agent for better assistance.",
                         "kn-IN": "ಕ್ಷಮಿಸಿ, ನಿಮ್ಮ ಸಮಸ್ಯೆಯನ್ನು ನಾನು ಅರ್ಥಮಾಡಿಕೊಳ್ಳಲು ಕಷ್ಟಪಡುತ್ತಿದ್ದೇನೆ. ದಯವಿಟ್ಟು ಕಾಯಿರಿ, ನಾನು ನಿಮಗೆ ಉತ್ತಮ ಸಹಾಯಕ್ಕಾಗಿ ಮಾನವ ಏಜೆಂಟ್‌ಗೆ ಸಂಪರ್ಕಿಸುತ್ತಿದ್ದೇನೆ.",
                     }
-                    if locked_language in respose:
-                        yield respose[locked_language]
-                    else:
-                        yield respose[
-                            "en-IN"
-                        ]  # default to english if language not in response mapping
+                    yield escalate.get(locked_language, escalate["en-IN"])
             else:
                 yield response.response
+
         elif self.phase == PHASE.VALIDATION:
             self.log.info(
                 f"phase=VALIDATION input={input_text!r} lang={self.semantic_memory.user_language!r}"
@@ -175,12 +157,10 @@ class DialogueFlow:
 
             self.system_score = response.system_score
             self.user_score = response.user_score
+            self.log.info(
+                f"VALIDATION scores — system={self.system_score:.2f} user={self.user_score:.2f}"
+            )
 
-            print("------------------------------------")
-            print(response.model_dump())
-            print("------------------------------------")
-
-            # Adding a follow up loop in Validation phase
             if self.first_validate:
                 self.first_validate = False
                 yield response.response
@@ -189,36 +169,20 @@ class DialogueFlow:
                     self.phase = PHASE.COMPLETE
                     self.log.info("User confirmed - phase transitioning to COMPLETE")
 
-                    if response.user_confidence in [
-                        CONFIDENCE_LEVEL.GREEN,
-                        CONFIDENCE_LEVEL.YELLOW,
-                    ]:
-                        response = {
+                    if _not_red(response.user_score):
+                        confirmed = {
                             "hi-IN": "धन्यवाद पुष्टि करने के लिए। आपकी क्वेरी नोट कर ली गई है, हम इसे देखेंगे।",
                             "en-IN": "Thank you for confirming. Your query has been noted, we will look into it.",
                             "kn-IN": "ದೃಢೀಕರಿಸಿದಕ್ಕಾಗಿ ಧನ್ಯವಾದಗಳು. ನಿಮ್ಮ ಪ್ರಶ್ನೆಯನ್ನು ಗಮನಿಸಲಾಗಿದೆ, ನಾವು ಅದನ್ನು ನೋಡುತ್ತೇವೆ.",
                         }
-                        if self.semantic_memory.user_language in response:
-                            yield response[self.semantic_memory.user_language]
-                        else:
-                            yield response[
-                                "en-IN"
-                            ]  # default to english if language not in response mapping
-                    elif response.user_confidence == CONFIDENCE_LEVEL.RED:
-                        response = {
-                            "hi-IN": "मुझे bbbbbbbbb है, मैं आपकी समस्या को समझ नहीं पा रहा हूँ। कृपया मुझे एक पल दें, मैं आपको एक मानव एजेंट से जोड़ता हूँ।",
+                        yield confirmed.get(self.semantic_memory.user_language, confirmed["en-IN"])
+                    elif _is_red(response.user_score):
+                        escalate = {
+                            "hi-IN": "मुझे खेद है, मैं आपकी समस्या को समझ नहीं पा रहा हूँ। कृपया मुझे एक पल दें, मैं आपको एक मानव एजेंट से जोड़ता हूँ।",
                             "en-IN": "Apologies, I'm having trouble understanding your issue. Please hold on, I'm connecting you to a human agent for better assistance.",
                             "kn-IN": "ಕ್ಷಮಿಸಿ, ನಿಮ್ಮ ಸಮಸ್ಯೆಯನ್ನು ನಾನು ಅರ್ಥಮಾಡಿಕೊಳ್ಳಲು ಕಷ್ಟಪಡುತ್ತಿದ್ದೇನೆ. ದಯವಿಟ್ಟು ಕಾಯಿರಿ, ನಾನು ನಿಮಗೆ ಉತ್ತಮ ಸಹಾಯಕ್ಕಾಗಿ ಮಾನವ ಏಜೆಂಟ್‌ಗೆ ಸಂಪರ್ಕಿಸುತ್ತಿದ್ದೇನೆ.",
                         }
-                        if self.semantic_memory.user_language in response:
-                            yield response[self.semantic_memory.user_language]
-                        else:
-                            yield response[
-                                "en-IN"
-                            ]  # default to english if language not in response mapping
+                        yield escalate.get(self.semantic_memory.user_language, escalate["en-IN"])
                 else:
-                    # User denied or was unclear - stay in VALIDATION and ask again
-                    self.log.info(
-                        "User denied or unclear - staying in VALIDATION for follow-up"
-                    )
+                    self.log.info("User denied or unclear - staying in VALIDATION for follow-up")
                     yield response.response
