@@ -524,7 +524,7 @@ class CallSession:
             summary=mem.summary,
             intent=mem.intent,
             key_details=str(mem.key_details) if mem.key_details else None,
-            routed_department=mem.service_type.value if mem.service_type else None,
+            routed_department_id=None,  # resolved later by a human agent / admin
         )
         self.call_log.info("session saved to db")
 

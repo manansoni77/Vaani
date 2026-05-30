@@ -27,7 +27,7 @@ def save_call_session(
     user_score: float | None = None,
     urgency_score: float | None = None,
     query_type: str | None = None,
-    routed_department: str | None = None,
+    routed_department_id: int | None = None,
     taken_over_by: int | None = None,
 ) -> None:
     try:
@@ -50,7 +50,7 @@ def save_call_session(
             # 2. create ticket for this call
             ticket = Ticket(
                 caller_id=caller.id,
-                routed_department=routed_department,
+                routed_department_id=routed_department_id,
                 status="open",
                 priority="normal",
                 created_at=started_at,

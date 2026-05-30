@@ -4,7 +4,7 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from config import R2_ACCOUNT_ID, R2_BUCKET_NAME
 from loggers import get_logger, setup_logging, LOG_ENTITIES
-from routers import auth_router, call_router, datasets_router, logs_router, sessions_router, users_router
+from routers import auth_router, call_router, datasets_router, departments_router, logs_router, sessions_router, users_router
 
 _app_log = get_logger(LOG_ENTITIES.APP)
 
@@ -32,6 +32,7 @@ app.add_middleware(
 
 app.include_router(auth_router)
 app.include_router(users_router)
+app.include_router(departments_router)
 app.include_router(call_router)
 app.include_router(logs_router)
 app.include_router(sessions_router)

@@ -5,11 +5,26 @@ from .engine import Base
 from constants import ROLE_TYPE
 
 
+class Department(Base):
+    __tablename__ = "departments"
+    id          = Column(Integer, primary_key=True, autoincrement=True)
+    name        = Column(String, nullable=False, unique=True)
+    description = Column(Text, nullable=True)
+    active      = Column(Boolean, nullable=False, default=True)
+    created_at  = Column(String, nullable=False)
+    updated_at  = Column(String, nullable=False)
+
+    roles          = relationship("Role", back_populates="department")
+    routed_tickets = relationship("Ticket", back_populates="routed_department")
+
+
 class Role(Base):
     __tablename__ = "roles"
-    id = Column(Integer, primary_key=True, autoincrement=True)
-    role_type = Column(Enum(ROLE_TYPE), nullable=False)          # explicit role — no magic string checks needed
-    department_name = Column(String, nullable=True)              # null for IT_ADMIN / SUPER_ADMIN; display name for all others
+    id            = Column(Integer, primary_key=True, autoincrement=True)
+    role_type     = Column(Enum(ROLE_TYPE), nullable=False)
+    department_id = Column(Integer, ForeignKey("departments.id"), nullable=True)  # null for system roles
+
+    department  = relationship("Department", back_populates="roles")
     staff_users = relationship("StaffUser", back_populates="role")
 
 
@@ -61,7 +76,7 @@ class Ticket(Base):
 
     id = Column(Integer, primary_key=True, autoincrement=True)
     caller_id = Column(Integer, ForeignKey("callers.id"), nullable=False)
-    routed_department = Column(String, nullable=True)
+    routed_department_id = Column(Integer, ForeignKey("departments.id"), nullable=True)
     assigned_to = Column(Integer, ForeignKey("staff_users.id"), nullable=True)
     status = Column(String, nullable=False, default="open")
     priority = Column(String, nullable=False, default="normal")
@@ -72,6 +87,7 @@ class Ticket(Base):
     created_at = Column(String, nullable=True)
     updated_at = Column(String, nullable=True)
 
+    routed_department = relationship("Department", back_populates="routed_tickets")
     caller = relationship("Caller", back_populates="tickets")
     assignee = relationship(
         "StaffUser", foreign_keys=[assigned_to], back_populates="assigned_tickets"

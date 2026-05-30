@@ -54,14 +54,14 @@ def _seed_admins(db_url: str, admins: list[dict]) -> None:
                 print(f"  skip  {email!r} — already exists")
                 continue
 
-            # Find or create the Role row.
+            # Find or create the Role row (system roles have department_id=None).
             role = (
                 db.query(Role)
-                .filter(Role.role_type == role_type, Role.department_name == None)  # noqa: E711
+                .filter(Role.role_type == role_type, Role.department_id == None)  # noqa: E711
                 .first()
             )
             if role is None:
-                role = Role(role_type=role_type, department_name=None)
+                role = Role(role_type=role_type, department_id=None)
                 db.add(role)
                 db.flush()
 

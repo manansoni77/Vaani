@@ -35,13 +35,15 @@ class TokenResponse(BaseModel):
 def _make_token(user: StaffUser) -> str:
     """Encode an app JWT from a fully-loaded StaffUser (role must be joined)."""
     now = datetime.now(timezone.utc)
+    dept = user.role.department  # None for system roles (IT_ADMIN, SUPER_ADMIN)
     payload = {
         "sub":             str(user.id),
         "email":           user.email,
         "name":            user.name,
         "role_type":       user.role.role_type.value,
         "role_id":         str(user.role_id),
-        "department_name": user.role.department_name,  # null for IT_ADMIN / SUPER_ADMIN
+        "department_id":   dept.id   if dept else None,
+        "department_name": dept.name if dept else None,
         "iat":             int(now.timestamp()),
         "exp":             int((now + timedelta(seconds=JWT_EXPIRE_SECS)).timestamp()),
     }
@@ -139,7 +141,8 @@ def google_auth(body: GoogleAuthRequest) -> TokenResponse:
         user.last_login_at = datetime.now(timezone.utc).isoformat(timespec="milliseconds")  # type: ignore
         db.commit()
         db.refresh(user)
-        _ = user.role  # load relationship before session closes
+        _ = user.role            # load role before session closes
+        _ = user.role.department  # load department (None for system roles)
 
         token = _make_token(user)
 
