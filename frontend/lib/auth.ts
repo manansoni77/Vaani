@@ -40,3 +40,21 @@ export function decodeGoogleJwt(token: string): GoogleJwtPayload | null {
     return null;
   }
 }
+
+// ---------------------------------------------------------------------------
+// App token expiry check
+// ---------------------------------------------------------------------------
+
+/**
+ * Returns true if the app JWT is expired or malformed.
+ * Includes a 30-second buffer to account for clock skew between client and server.
+ */
+export function isTokenExpired(token: string): boolean {
+  try {
+    const payloadB64 = token.split(".")[1];
+    const { exp } = JSON.parse(atob(payloadB64.replace(/-/g, "+").replace(/_/g, "/"))) as { exp: number };
+    return Date.now() >= (exp - 30) * 1000;
+  } catch {
+    return true; // malformed token → treat as expired
+  }
+}

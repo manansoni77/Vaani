@@ -8,7 +8,8 @@ import {
   useCallback,
 } from "react";
 import type { AuthUser } from "@/lib/auth";
-import { AUTH_STORAGE_KEY, decodeGoogleJwt } from "@/lib/auth";
+import { AUTH_STORAGE_KEY, decodeGoogleJwt, isTokenExpired } from "@/lib/auth";
+import { setLogoutCallback } from "@/lib/apiClient";
 import { API_BASE } from "@/lib/config";
 
 // ---------------------------------------------------------------------------
@@ -47,12 +48,17 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
   const [user, setUser] = useState<AuthUser | null>(null);
   const [isLoading, setIsLoading] = useState(true);
 
-  // Rehydrate from localStorage on first mount
+  // Rehydrate from localStorage on first mount, discarding expired tokens
   useEffect(() => {
     try {
       const raw = localStorage.getItem(AUTH_STORAGE_KEY);
       if (raw) {
-        setUser(JSON.parse(raw) as AuthUser);
+        const stored = JSON.parse(raw) as AuthUser;
+        if (isTokenExpired(stored.accessToken)) {
+          localStorage.removeItem(AUTH_STORAGE_KEY);
+        } else {
+          setUser(stored);
+        }
       }
     } catch {
       localStorage.removeItem(AUTH_STORAGE_KEY);
@@ -91,6 +97,11 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     localStorage.removeItem(AUTH_STORAGE_KEY);
     setUser(null);
   }, []);
+
+  // Register logout as the 401 handler for all apiFetch calls
+  useEffect(() => {
+    setLogoutCallback(logout);
+  }, [logout]);
 
   return (
     <AuthContext.Provider value={{ user, login, logout, isLoading }}>

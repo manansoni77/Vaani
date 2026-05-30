@@ -7,6 +7,7 @@ import { API_BASE } from "@/lib/config";
 // ---------------------------------------------------------------------------
 
 let _token: string | null = null;
+let _onUnauthorized: (() => void) | null = null;
 
 /** Called by UserProvider — do not call from other places. */
 export function setApiToken(token: string | null): void {
@@ -16,6 +17,15 @@ export function setApiToken(token: string | null): void {
 /** Returns the current token (useful for one-off access outside React). */
 export function getApiToken(): string | null {
   return _token;
+}
+
+/**
+ * Register a callback that fires whenever any API response returns 401.
+ * AuthProvider calls this with its logout function so the user is automatically
+ * signed out when the token expires or is rejected by the backend.
+ */
+export function setLogoutCallback(fn: () => void): void {
+  _onUnauthorized = fn;
 }
 
 // ---------------------------------------------------------------------------
@@ -45,6 +55,9 @@ export async function apiFetch<T = unknown>(
   const res = await fetch(`${API_BASE}${path}`, { ...init, headers });
 
   if (!res.ok) {
+    if (res.status === 401) {
+      _onUnauthorized?.();
+    }
     const body = await res.text().catch(() => "");
     throw new Error(`API ${res.status} – ${res.statusText}${body ? `: ${body}` : ""}`);
   }
