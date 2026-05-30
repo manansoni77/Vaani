@@ -6,7 +6,7 @@ from sqlalchemy.orm import Session
 
 from database import Role, StaffUser, get_engine
 from constants import ROLE_TYPE
-from .auth import get_current_user
+from .auth import get_current_user, require_roles
 
 router = APIRouter(prefix="/users", tags=["users"])
 
@@ -61,9 +61,30 @@ def _find_admin(
 
 # ── register ──────────────────────────────────────────────────────────────────
 
-# Roles that must have a department, roles that must not.
+# Which roles each caller type is allowed to create.
+_CREATABLE_BY: dict[ROLE_TYPE, set[ROLE_TYPE]] = {
+    ROLE_TYPE.SUPER_ADMIN: {
+        ROLE_TYPE.CALL_CENTER_ADMIN,
+        ROLE_TYPE.CALL_CENTER_USER,
+        ROLE_TYPE.DEPT_ADMIN,
+        ROLE_TYPE.DEPT_USER,
+    },
+    ROLE_TYPE.CALL_CENTER_ADMIN: {ROLE_TYPE.CALL_CENTER_USER},
+    ROLE_TYPE.DEPT_ADMIN:        {ROLE_TYPE.DEPT_USER},
+}
+
+# department_name is required for dept roles, forbidden for all others.
 _DEPT_REQUIRED = {ROLE_TYPE.DEPT_ADMIN, ROLE_TYPE.DEPT_USER}
-_DEPT_FORBIDDEN = {ROLE_TYPE.IT_ADMIN, ROLE_TYPE.SUPER_ADMIN}
+_DEPT_FORBIDDEN = {
+    ROLE_TYPE.IT_ADMIN,
+    ROLE_TYPE.SUPER_ADMIN,
+    ROLE_TYPE.CALL_CENTER_ADMIN,
+    ROLE_TYPE.CALL_CENTER_USER,
+}
+
+# Roles where only one instance may exist across the whole system / per department.
+_SINGLETON_SYSTEM = {ROLE_TYPE.CALL_CENTER_ADMIN}   # one globally
+_SINGLETON_PER_DEPT = {ROLE_TYPE.DEPT_ADMIN}         # one per department
 
 
 class RegisterUserRequest(BaseModel):
@@ -85,7 +106,9 @@ class RegisterUserResponse(BaseModel):
 @router.post("/register", response_model=RegisterUserResponse, status_code=201)
 def register_user(
     body: RegisterUserRequest,
-    claims: dict = Depends(get_current_user),
+    claims: dict = Depends(
+        require_roles(ROLE_TYPE.SUPER_ADMIN, ROLE_TYPE.CALL_CENTER_ADMIN, ROLE_TYPE.DEPT_ADMIN)
+    ),
 ) -> RegisterUserResponse:
     """Pre-provision a staff user account.
 
@@ -93,30 +116,31 @@ def register_user(
     activates it automatically on their first Google sign-in.
 
     Permission rules:
-    - super_admin  — can create any role
-    - dept_admin   — can only create dept_user within their own department
-    - it_admin     — cannot create any accounts (403)
-    - all others   — 403
+    - super_admin        — can create call_center_admin/user, dept_admin/user
+    - call_center_admin  — can create call_center_user only
+    - dept_admin         — can create dept_user in their own department only
+    - it_admin / others  — 403 (blocked by require_roles before reaching here)
+
+    Singleton constraints:
+    - call_center_admin: only one may exist system-wide
+    - dept_admin:        only one per department
     """
     caller_role = ROLE_TYPE(claims["role_type"])
     caller_dept = claims.get("department_name")
 
-    # ── permission gate ───────────────────────────────────────────────────────
-    if caller_role == ROLE_TYPE.SUPER_ADMIN:
-        pass  # unrestricted
-    elif caller_role == ROLE_TYPE.DEPT_ADMIN:
-        if body.role_type != ROLE_TYPE.DEPT_USER:
-            raise HTTPException(
-                status_code=403,
-                detail="dept_admin can only create dept_user accounts",
-            )
-        if body.department_name != caller_dept:
-            raise HTTPException(
-                status_code=403,
-                detail="dept_admin can only create users in their own department",
-            )
-    else:
-        raise HTTPException(status_code=403, detail="not authorised to create users")
+    # ── role creation permission ──────────────────────────────────────────────
+    if body.role_type not in _CREATABLE_BY.get(caller_role, set()):
+        raise HTTPException(
+            status_code=403,
+            detail=f"{caller_role.value} cannot create {body.role_type.value} accounts",
+        )
+
+    # dept_admin is scoped to their own department only.
+    if caller_role == ROLE_TYPE.DEPT_ADMIN and body.department_name != caller_dept:
+        raise HTTPException(
+            status_code=403,
+            detail="dept_admin can only create users in their own department",
+        )
 
     # ── department_name validation ────────────────────────────────────────────
     if body.role_type in _DEPT_REQUIRED and not body.department_name:
@@ -136,6 +160,36 @@ def register_user(
         # ── duplicate email check ─────────────────────────────────────────────
         if db.query(StaffUser).filter(StaffUser.email == body.email).first():
             raise HTTPException(status_code=409, detail="email already registered")
+
+        # ── singleton constraints ─────────────────────────────────────────────
+        if body.role_type in _SINGLETON_SYSTEM:
+            exists = (
+                db.query(StaffUser)
+                .join(StaffUser.role)
+                .filter(Role.role_type == body.role_type)
+                .first()
+            )
+            if exists:
+                raise HTTPException(
+                    status_code=409,
+                    detail=f"a {body.role_type.value} already exists",
+                )
+
+        if body.role_type in _SINGLETON_PER_DEPT:
+            exists = (
+                db.query(StaffUser)
+                .join(StaffUser.role)
+                .filter(
+                    Role.role_type == body.role_type,
+                    Role.department_name == body.department_name,
+                )
+                .first()
+            )
+            if exists:
+                raise HTTPException(
+                    status_code=409,
+                    detail=f"a {body.role_type.value} already exists for department {body.department_name!r}",
+                )
 
         # ── find or create the matching Role row ──────────────────────────────
         role = (

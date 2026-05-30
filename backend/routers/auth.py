@@ -9,6 +9,7 @@ from pydantic import BaseModel
 from sqlalchemy.orm import Session
 
 from config import GOOGLE_CLIENT_ID, JWT_ALGORITHM, JWT_EXPIRE_SECS, JWT_SECRET
+from constants import ROLE_TYPE
 from database import StaffUser, get_engine
 from loggers import LOG_ENTITIES, get_logger
 
@@ -57,13 +58,32 @@ def _decode_token(token: str) -> dict:
         raise HTTPException(status_code=401, detail="invalid token")
 
 
-# ── FastAPI dependency ────────────────────────────────────────────────────────
+# ── FastAPI dependencies ──────────────────────────────────────────────────────
 
 def get_current_user(
     credentials: HTTPAuthorizationCredentials = Depends(_bearer),
 ) -> dict:
     """Dependency: extracts and verifies the Bearer JWT, returns its claims dict."""
     return _decode_token(credentials.credentials)
+
+
+def require_roles(*allowed: ROLE_TYPE):
+    """Dependency factory — verifies the Bearer JWT and enforces role membership.
+
+    Usage:
+        claims: dict = Depends(require_roles(ROLE_TYPE.SUPER_ADMIN, ROLE_TYPE.DEPT_ADMIN))
+
+    Returns the decoded JWT claims dict so the endpoint can read role, department, etc.
+    Raises 401 if the token is missing/invalid, 403 if the caller's role is not in *allowed*.
+    """
+    allowed_set = frozenset(allowed)
+
+    def _check(claims: dict = Depends(get_current_user)) -> dict:
+        if ROLE_TYPE(claims["role_type"]) not in allowed_set:
+            raise HTTPException(status_code=403, detail="insufficient permissions")
+        return claims
+
+    return _check
 
 
 # ── endpoint ──────────────────────────────────────────────────────────────────
