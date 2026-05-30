@@ -25,6 +25,7 @@ export type BackendUserResponse = {
   email: string;
   google_sub: string;
   role_type: RoleType;
+  department_id: number | null;   // null for it_admin / super_admin
   department_name: string | null; // null for it_admin / super_admin
   active: boolean;
   created_at: string;             // ISO datetime string
@@ -43,15 +44,16 @@ export type UserProfile = {
   name: string;
   email: string;
   googleId: string;
-  picture?: string;           // not in DB — captured from Google JWT at sign-in
+  picture?: string;             // not in DB — captured from Google JWT at sign-in
 
   // ── Org ────────────────────────────────────────────────────────────────
-  department: string | null;  // null for it_admin / super_admin
+  departmentId: number | null;  // null for it_admin / super_admin
+  department: string | null;    // null for it_admin / super_admin
   accessLevel: RoleType;
-  userSince: string;          // ISO datetime string
+  userSince: string;            // ISO datetime string
 
   // ── Admin hierarchy ────────────────────────────────────────────────────
-  deptAdmin: AdminContact | null;   // null when no dept admin exists or caller has no dept
+  deptAdmin: AdminContact | null;
   itAdmin: AdminContact | null;
   superAdmin: AdminContact | null;
 };
@@ -75,6 +77,7 @@ export function mapBackendUser(
     email: data.email,
     googleId: data.google_sub,
     picture,
+    departmentId: data.department_id,
     department: data.department_name,
     accessLevel: data.role_type,
     userSince: data.created_at,
