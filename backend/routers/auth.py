@@ -108,6 +108,7 @@ def google_auth(body: GoogleAuthRequest) -> TokenResponse:
             body.credential,
             google_requests.Request(),
             GOOGLE_CLIENT_ID,
+            clock_skew_in_seconds=10,
         )
     except Exception as exc:
         _log.warning(f"Google token verification failed: {exc!r}")

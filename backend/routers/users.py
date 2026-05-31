@@ -242,6 +242,54 @@ def register_user(
     )
 
 
+# ── list ──────────────────────────────────────────────────────────────────────
+
+@router.get("", response_model=list[RegisterUserResponse])
+def list_users(
+    claims: dict = Depends(
+        require_roles(ROLE_TYPE.SUPER_ADMIN, ROLE_TYPE.CALL_CENTER_ADMIN, ROLE_TYPE.DEPT_ADMIN)
+    ),
+) -> list[RegisterUserResponse]:
+    """List users visible to the caller based on their role.
+
+    - super_admin       — all users (every role type)
+    - call_center_admin — call_center_user accounts only
+    - dept_admin        — dept_user accounts in their own department only
+    """
+    caller_role    = ROLE_TYPE(claims["role_type"])
+    caller_dept_id = claims.get("department_id")
+
+    with Session(get_engine()) as db:
+        q = db.query(StaffUser).join(StaffUser.role)
+
+        if caller_role == ROLE_TYPE.CALL_CENTER_ADMIN:
+            q = q.filter(Role.role_type == ROLE_TYPE.CALL_CENTER_USER)
+        elif caller_role == ROLE_TYPE.DEPT_ADMIN:
+            q = q.filter(
+                Role.role_type == ROLE_TYPE.DEPT_USER,
+                Role.department_id == caller_dept_id,
+            )
+        # super_admin: no filter — sees everyone
+
+        users = q.order_by(StaffUser.id).all()
+        # load department relationship for each user before session closes
+        for u in users:
+            _ = u.role.department
+
+    return [
+        RegisterUserResponse(
+            id=u.id,  # type: ignore[arg-type]
+            name=str(u.name),
+            email=str(u.email),
+            role_type=u.role.role_type.value,
+            department_id=u.role.department.id if u.role.department else None,  # type: ignore[arg-type]
+            department_name=str(u.role.department.name) if u.role.department else None,
+            active=bool(u.active),
+        )
+        for u in users
+    ]
+
+
 # ── me ────────────────────────────────────────────────────────────────────────
 
 @router.get("/me", response_model=UserMeResponse)
