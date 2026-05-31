@@ -3,6 +3,7 @@
 import { GoogleOAuthProvider } from "@react-oauth/google";
 import { AuthProvider } from "@/contexts/AuthContext";
 import { UserProvider } from "@/contexts/UserContext";
+import { DepartmentProvider } from "@/contexts/DepartmentContext";
 import { AuthGuard } from "@/components/AuthGuard";
 import { GOOGLE_CLIENT_ID } from "@/lib/config";
 
@@ -15,14 +16,18 @@ import { GOOGLE_CLIENT_ID } from "@/lib/config";
  *       UserProvider     — reads the credential, syncs token → apiClient,
  *                          fetches and caches the full UserProfile
  *         AuthGuard      — redirects to /login when no user is present
- *           {children}
+ *           DepartmentProvider — fetches and caches the department list;
+ *                                inside the guard so it only runs authenticated
+ *             {children}
  */
 export function Providers({ children }: { children: React.ReactNode }) {
   return (
     <GoogleOAuthProvider clientId={GOOGLE_CLIENT_ID}>
       <AuthProvider>
         <UserProvider>
-          <AuthGuard>{children}</AuthGuard>
+          <AuthGuard>
+            <DepartmentProvider>{children}</DepartmentProvider>
+          </AuthGuard>
         </UserProvider>
       </AuthProvider>
     </GoogleOAuthProvider>
