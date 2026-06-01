@@ -4,13 +4,24 @@ import Image from "next/image";
 import Link from "next/link";
 import { useUser } from "@/contexts/UserContext";
 
+const ADMIN_ROLES = new Set(["super_admin", "call_center_admin", "dept_admin"]);
+
 export default function Home() {
   const { profile } = useUser();
+  const canAccessAdmin = ADMIN_ROLES.has(profile?.accessLevel ?? "");
 
   return (
     <div className="min-h-screen flex flex-col items-center justify-center bg-linear-to-br from-blue-50 to-indigo-100 dark:from-slate-900 dark:to-slate-800 p-4">
-      {/* Profile button — top-right */}
-      <div className="fixed top-4 right-4">
+      {/* Top-right: Admin button (role-gated) + Profile button */}
+      <div className="fixed top-4 right-4 flex items-center gap-2">
+        {canAccessAdmin && (
+          <Link
+            href="/admin/users"
+            className="px-3 py-2 bg-white dark:bg-slate-800 rounded-full shadow-md border border-slate-200 dark:border-slate-700 hover:shadow-lg transition-shadow text-sm font-semibold text-slate-700 dark:text-slate-300"
+          >
+            Admin
+          </Link>
+        )}
         <Link
           href="/user"
           className="flex items-center gap-2 px-3 py-2 bg-white dark:bg-slate-800 rounded-full shadow-md border border-slate-200 dark:border-slate-700 hover:shadow-lg transition-shadow"

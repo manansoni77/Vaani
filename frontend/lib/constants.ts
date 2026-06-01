@@ -59,6 +59,44 @@ export const AUDIT_SELECT_CLS =
   "px-3 py-1.5 text-sm bg-white dark:bg-slate-800 border border-slate-300 dark:border-slate-600 rounded-lg text-slate-900 dark:text-white disabled:opacity-50 disabled:cursor-not-allowed focus:outline-none focus:ring-2 focus:ring-purple-400";
 
 // ---------------------------------------------------------------------------
+// Admin panel — role display and permission constants
+// ---------------------------------------------------------------------------
+
+import type { RoleType } from "@/lib/userStore";
+
+export const ROLE_LABELS: Record<RoleType, string> = {
+  super_admin:       "Super Admin",
+  it_admin:          "IT Admin",
+  call_center_admin: "Call Center Admin",
+  call_center_user:  "Call Center Agent",
+  dept_admin:        "Department Admin",
+  dept_user:         "Department User",
+};
+
+/** Roles that each caller role is permitted to create via POST /users/register. */
+export const CREATABLE_ROLES: Partial<Record<RoleType, RoleType[]>> = {
+  super_admin:       ["call_center_admin", "call_center_user", "dept_admin", "dept_user"],
+  call_center_admin: ["call_center_user"],
+  dept_admin:        ["dept_user"],
+};
+
+/** Roles that require a department_id when registering. */
+export const DEPT_REQUIRED_ROLES = new Set<RoleType>(["dept_admin", "dept_user"]);
+
+/** Roles that can access the admin panel (GET /users, POST /users/register). */
+export const CAN_MANAGE_ROLES = new Set<RoleType>(["super_admin", "call_center_admin", "dept_admin"]);
+
+// ---------------------------------------------------------------------------
+// Admin panel — shared form element class strings
+// ---------------------------------------------------------------------------
+
+export const FORM_INPUT_CLS =
+  "px-3 py-2 rounded-lg border border-slate-200 dark:border-slate-600 bg-white dark:bg-slate-700 text-sm text-slate-900 dark:text-white focus:outline-none focus:ring-2 focus:ring-indigo-500 w-full";
+
+export const FORM_LABEL_CLS =
+  "text-xs font-semibold text-slate-500 dark:text-slate-400 uppercase tracking-wide mb-1 block";
+
+// ---------------------------------------------------------------------------
 // Dataset page — model type badge colours
 // ---------------------------------------------------------------------------
 

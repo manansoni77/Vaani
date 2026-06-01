@@ -9,6 +9,7 @@ import {
 } from "react";
 import type { AuthUser } from "@/lib/auth";
 import { AUTH_STORAGE_KEY, decodeGoogleJwt } from "@/lib/auth";
+import { setApiToken, setLogoutCallback } from "@/lib/apiClient";
 import { API_BASE } from "@/lib/config";
 
 // ---------------------------------------------------------------------------
@@ -47,12 +48,22 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
   const [user, setUser] = useState<AuthUser | null>(null);
   const [isLoading, setIsLoading] = useState(true);
 
-  // Rehydrate from localStorage on first mount
+  // Rehydrate from localStorage on first mount.
+  // setApiToken is called HERE (before setState) so the token is in apiClient
+  // before any child component's useEffect fires. Calling it in a child effect
+  // (e.g. UserProvider) caused a race where DepartmentProvider fetched before
+  // the Authorization header was attached.
   useEffect(() => {
     try {
       const raw = localStorage.getItem(AUTH_STORAGE_KEY);
       if (raw) {
-        setUser(JSON.parse(raw) as AuthUser);
+        const stored = JSON.parse(raw) as AuthUser;
+        if (stored.accessToken) {
+          setApiToken(stored.accessToken);
+          setUser(stored);
+        } else {
+          localStorage.removeItem(AUTH_STORAGE_KEY);
+        }
       }
     } catch {
       localStorage.removeItem(AUTH_STORAGE_KEY);
@@ -62,7 +73,6 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
   }, []);
 
   const login = useCallback(async (googleCredential: string) => {
-    // Capture picture from the Google JWT before discarding the credential
     const picture = decodeGoogleJwt(googleCredential)?.picture;
 
     const res = await fetch(`${API_BASE}/auth/google`, {
@@ -82,15 +92,22 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
 
     const { access_token } = (await res.json()) as TokenResponse;
 
+    setApiToken(access_token);
     const authUser: AuthUser = { accessToken: access_token, picture };
     localStorage.setItem(AUTH_STORAGE_KEY, JSON.stringify(authUser));
     setUser(authUser);
   }, []);
 
   const logout = useCallback(() => {
+    setApiToken(null);
     localStorage.removeItem(AUTH_STORAGE_KEY);
     setUser(null);
   }, []);
+
+  // Register logout as the 401 handler for all apiFetch calls
+  useEffect(() => {
+    setLogoutCallback(logout);
+  }, [logout]);
 
   return (
     <AuthContext.Provider value={{ user, login, logout, isLoading }}>
