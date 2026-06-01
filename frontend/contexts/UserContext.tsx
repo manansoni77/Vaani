@@ -8,7 +8,7 @@ import {
   useCallback,
 } from "react";
 import { useAuth } from "@/contexts/AuthContext";
-import { setApiToken, apiFetch } from "@/lib/apiClient";
+import { apiFetch } from "@/lib/apiClient";
 import type { UserProfile, BackendUserResponse } from "@/lib/userStore";
 import { USER_STORAGE_KEY, mapBackendUser } from "@/lib/userStore";
 
@@ -35,11 +35,6 @@ export function UserProvider({ children }: { children: React.ReactNode }) {
   const [profile, setProfile] = useState<UserProfile | null>(null);
   const [isLoading, setIsLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
-
-  // Keep the API client token in sync with auth state
-  useEffect(() => {
-    setApiToken(user?.accessToken ?? null);
-  }, [user]);
 
   const fetchProfile = useCallback(async () => {
     if (!user) return;
