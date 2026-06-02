@@ -7,6 +7,7 @@
  */
 
 import { apiFetch } from "@/lib/apiClient";
+import type { Session, Ticket, TicketStatus, QueryType } from "@/lib/types";
 import type { RoleType } from "@/lib/userStore";
 
 // ============================================================================
@@ -107,5 +108,113 @@ export function registerUser(data: RegisterUserRequest): Promise<StaffUser> {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify(data),
+  });
+}
+
+// ============================================================================
+// Sessions
+// ============================================================================
+
+export type SessionHistoryParams = {
+  start_date?: string;
+  end_date?: string;
+  query_type?: QueryType;
+  limit?: number;
+  offset?: number;
+  order?: "newest" | "oldest";
+};
+
+/** GET /sessions — active live sessions visible to the caller. */
+export function getSessions(): Promise<Session[]> {
+  return apiFetch<Session[]>("/sessions");
+}
+
+/** GET /sessions/history — completed sessions, role-scoped. */
+export function getSessionsHistory(params: SessionHistoryParams = {}): Promise<Session[]> {
+  const p = new URLSearchParams();
+  if (params.start_date) p.set("start_date", params.start_date);
+  if (params.end_date) p.set("end_date", params.end_date);
+  if (params.query_type) p.set("query_type", params.query_type);
+  if (params.limit != null) p.set("limit", String(params.limit));
+  if (params.offset != null) p.set("offset", String(params.offset));
+  if (params.order) p.set("order", params.order);
+  const qs = p.toString();
+  return apiFetch<Session[]>(`/sessions/history${qs ? `?${qs}` : ""}`);
+}
+
+/** POST /sessions/{id}/takeover — claim a live session for human handling. */
+export function takeoverSession(
+  sessionId: string,
+  agentId: string,
+): Promise<{ session_id: string; claimed_by: string }> {
+  return apiFetch(`/sessions/${sessionId}/takeover`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ agent_id: agentId }),
+  });
+}
+
+/**
+ * POST /sessions/{id}/route — assign a live session to a department.
+ * After this call the session leaves the call-center live dashboard and
+ * appears in the target department's.
+ */
+export function routeSession(
+  sessionId: string,
+  departmentId: number,
+): Promise<{ session_id: string; routed_department_id: number }> {
+  return apiFetch(`/sessions/${sessionId}/route`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ department_id: departmentId }),
+  });
+}
+
+// ============================================================================
+// Tickets
+// ============================================================================
+
+export type GetTicketsParams = {
+  status?: TicketStatus;
+  limit?: number;
+  offset?: number;
+};
+
+/** GET /tickets — list tickets visible to the caller, optionally filtered. */
+export function getTickets(params: GetTicketsParams = {}): Promise<Ticket[]> {
+  const p = new URLSearchParams();
+  if (params.status) p.set("status", params.status);
+  if (params.limit != null) p.set("limit", String(params.limit));
+  if (params.offset != null) p.set("offset", String(params.offset));
+  const qs = p.toString();
+  return apiFetch<Ticket[]>(`/tickets${qs ? `?${qs}` : ""}`);
+}
+
+/**
+ * POST /tickets/{id}/claim — assigns the ticket to the caller and moves it
+ * from in_review → in_progress.
+ */
+export function claimTicket(id: number): Promise<Ticket> {
+  return apiFetch<Ticket>(`/tickets/${id}/claim`, { method: "POST" });
+}
+
+/**
+ * POST /tickets/{id}/reroute — move ticket to a different department (or
+ * back to the call centre by passing null).
+ */
+export function rerouteTicket(id: number, departmentId: number | null): Promise<Ticket> {
+  return apiFetch<Ticket>(`/tickets/${id}/reroute`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ department_id: departmentId }),
+  });
+}
+
+/** PATCH /tickets/{id}/status — update ticket status. */
+export function updateTicketStatus(id: number, status: TicketStatus): Promise<Ticket> {
+  return apiFetch<Ticket>(`/tickets/${id}/status`, {
+    method: "PATCH",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ status }),
   });
 }
