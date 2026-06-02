@@ -2,9 +2,10 @@
 
 import { useState, useEffect } from "react";
 
-import { API_BASE, WS_BASE } from "@/lib/config";
+import { WS_BASE } from "@/lib/config";
 import { formatDuration } from "@/lib/utils";
 import { useAudioStream } from "@/lib/hooks/useAudioStream";
+import { takeoverSession, routeSession } from "@/lib/api";
 import type { Session } from "@/lib/types";
 import { CloseIcon, CopyIcon, CheckIcon, MicIcon, MutedIcon, SpinnerIcon } from "@/components/ui/icons";
 import {
@@ -16,6 +17,8 @@ import {
   TakeoverSpeakerBadge,
   ClaimedByBadge,
 } from "@/components/admin/badges";
+import { useDepartments } from "@/contexts/DepartmentContext";
+import { useUser } from "@/contexts/UserContext";
 
 interface Props {
   session: Session;
@@ -31,6 +34,11 @@ export function DetailPanel({ session, live, agentId, panelWidth, onClose }: Pro
   const [copied, setCopied] = useState(false);
   const [takingOver, setTakingOver] = useState(false);
   const [audioError, setAudioError] = useState<string | null>(null);
+  const [routing, setRouting] = useState(false);
+  const [selectedDeptId, setSelectedDeptId] = useState<number | "">("");
+
+  const { profile } = useUser();
+  const { departments } = useDepartments();
 
   const {
     status: audioStatus,
@@ -58,7 +66,6 @@ export function DetailPanel({ session, live, agentId, panelWidth, onClose }: Pro
   const isMyClaim = live && !!session.human_takeover && session.claimed_by === agentId;
   const isOthersClaim = live && !!session.human_takeover && session.claimed_by !== agentId;
 
-  // Connect audio when this agent owns the claim; disconnect on release or unmount.
   useEffect(() => {
     if (!isMyClaim) {
       audioDisconnect();
@@ -74,13 +81,19 @@ export function DetailPanel({ session, live, agentId, panelWidth, onClose }: Pro
   const handleTakeover = async () => {
     setTakingOver(true);
     try {
-      await fetch(`${API_BASE}/sessions/${session.session_id}/takeover`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ agent_id: agentId }),
-      });
+      await takeoverSession(session.session_id, agentId);
     } finally {
       setTakingOver(false);
+    }
+  };
+
+  const handleRoute = async () => {
+    if (!selectedDeptId) return;
+    setRouting(true);
+    try {
+      await routeSession(session.session_id, selectedDeptId as number);
+    } finally {
+      setRouting(false);
     }
   };
 
@@ -95,6 +108,12 @@ export function DetailPanel({ session, live, agentId, panelWidth, onClose }: Pro
     .split("\n")
     .map((l) => l.trim())
     .filter(Boolean);
+
+  const canRoute =
+    live &&
+    !session.routed_department_id &&
+    profile?.accessLevel != null &&
+    ["call_center_admin", "call_center_user", "super_admin"].includes(profile.accessLevel);
 
   // ---- Sections ----
 
@@ -158,7 +177,7 @@ export function DetailPanel({ session, live, agentId, panelWidth, onClose }: Pro
       </span>
       <div className="flex flex-wrap gap-1.5">
         <SentimentBadge sentiment={session.sentiment} />
-        <UrgencyBadge urgency={session.urgency_level} />
+        <UrgencyBadge urgencyScore={session.urgency_score} />
         {session.human_requested && (
           <span className="text-xs px-2 py-0.5 rounded-full bg-orange-100 text-orange-700 dark:bg-orange-900/50 dark:text-orange-300 font-semibold">
             Human Requested
@@ -290,8 +309,8 @@ export function DetailPanel({ session, live, agentId, panelWidth, onClose }: Pro
     session.summary ||
     session.intent ||
     session.key_details ||
-    session.agent_confidence ||
-    session.user_confidence ? (
+    session.system_score != null ||
+    session.user_score != null ? (
       <div className="flex flex-col gap-2">
         <span className="text-xs font-semibold text-slate-400 uppercase tracking-wide">
           Intelligence
@@ -318,14 +337,10 @@ export function DetailPanel({ session, live, agentId, panelWidth, onClose }: Pro
             </p>
           </div>
         )}
-        {(session.agent_confidence || session.user_confidence) && (
+        {(session.system_score != null || session.user_score != null) && (
           <div className="flex flex-wrap gap-1.5">
-            {session.agent_confidence && (
-              <ConfidenceBadge label="AI" level={session.agent_confidence} />
-            )}
-            {session.user_confidence && (
-              <ConfidenceBadge label="User" level={session.user_confidence} />
-            )}
+            <ConfidenceBadge label="AI" score={session.system_score ?? null} />
+            <ConfidenceBadge label="User" score={session.user_score ?? null} />
           </div>
         )}
       </div>
@@ -387,6 +402,34 @@ export function DetailPanel({ session, live, agentId, panelWidth, onClose }: Pro
           )}
         </div>
       )}
+    </div>
+  ) : null;
+
+  const routeSection = canRoute ? (
+    <div className="flex flex-col gap-2">
+      <span className="text-xs font-semibold text-slate-400 uppercase tracking-wide">
+        Route to Department
+      </span>
+      <div className="flex gap-2">
+        <select
+          value={selectedDeptId}
+          onChange={(e) => setSelectedDeptId(e.target.value ? Number(e.target.value) : "")}
+          className="flex-1 px-3 py-1.5 text-sm bg-white dark:bg-slate-800 border border-slate-300 dark:border-slate-600 rounded-lg text-slate-900 dark:text-white focus:outline-none focus:ring-2 focus:ring-green-400"
+        >
+          <option value="">Select department…</option>
+          {departments.filter((d) => d.active).map((d) => (
+            <option key={d.id} value={d.id}>{d.name}</option>
+          ))}
+        </select>
+        <button
+          onClick={handleRoute}
+          disabled={routing || !selectedDeptId}
+          className="px-4 py-1.5 bg-green-600 hover:bg-green-700 disabled:opacity-50 disabled:cursor-not-allowed text-white text-sm font-semibold rounded-lg transition-colors flex items-center gap-2"
+        >
+          {routing && <SpinnerIcon className="w-4 h-4 animate-spin" />}
+          Route
+        </button>
+      </div>
     </div>
   ) : null;
 
@@ -456,6 +499,7 @@ export function DetailPanel({ session, live, agentId, panelWidth, onClose }: Pro
           </div>
           <div className="flex flex-col gap-4">
             {takeoverSection}
+            {routeSection}
             {callerSignalsSection}
             {querySection}
             {timelineSection}
@@ -467,6 +511,7 @@ export function DetailPanel({ session, live, agentId, panelWidth, onClose }: Pro
       ) : (
         <div className="flex flex-col gap-5">
           {takeoverSection}
+          {routeSection}
           {sessionIdSection}
           {statusSection}
           {querySection}
