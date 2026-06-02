@@ -69,6 +69,7 @@ def build_status(
     service_type: str | None = None,
     location: str | None = None,
     since_when: str | None = None,
+    routed_department_id: int | None = None,
 ) -> dict:
     return {
         "event_type": event_type,
@@ -94,5 +95,6 @@ def build_status(
         "service_type": service_type,
         "location": location,
         "since_when": since_when,
+        "routed_department_id": routed_department_id,
         "timestamp": datetime.now(timezone.utc).isoformat(timespec="milliseconds"),
     }
