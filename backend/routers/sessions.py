@@ -1,3 +1,4 @@
+import asyncio
 import json
 from datetime import datetime
 from typing import Literal
@@ -180,11 +181,16 @@ async def stream_sessions(websocket: WebSocket) -> None:
     await websocket.accept()
     broadcaster = SessionBroadcaster.get()
     queue = broadcaster.subscribe()
+    _PING_INTERVAL = 30  # seconds
+
     try:
         while True:
-            status = await queue.get()
-            if _session_visible(claims, status):
-                await websocket.send_text(json.dumps(status))
+            try:
+                status = await asyncio.wait_for(queue.get(), timeout=_PING_INTERVAL)
+                if _session_visible(claims, status):
+                    await websocket.send_text(json.dumps(status))
+            except asyncio.TimeoutError:
+                await websocket.send_text(json.dumps({"type": "ping"}))
     except WebSocketDisconnect:
         pass
     finally:
@@ -210,8 +216,9 @@ async def takeover_session(
         raise HTTPException(
             status_code=409, detail=f"session already claimed by {session.claimed_by!r}"
         )
-    session.human_takeover = True
-    session.claimed_by = body.agent_id
+    session.human_takeover    = True
+    session.claimed_by        = body.agent_id
+    session.taken_over_by_id  = int(claims["sub"])  # staff_users.id from verified JWT
     _log.info(f"session {session_id!r} claimed by agent {body.agent_id!r}")
     session._emit_status("session_updated")
     return {"session_id": session_id, "claimed_by": body.agent_id}

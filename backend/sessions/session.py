@@ -53,6 +53,7 @@ class CallSession:
     _current_speech_start: float | None = field(default=None, init=False)
     human_takeover: bool = field(default=False, init=False)
     claimed_by: str | None = field(default=None, init=False)
+    taken_over_by_id: int | None = field(default=None, init=False)  # staff_users.id of the agent
     human_agent_ws: WebSocket | None = field(default=None, init=False)
     routed_department_id: int | None = field(default=None, init=False)
     _lang_locked: bool = field(default=False, init=False)
@@ -527,6 +528,7 @@ class CallSession:
             intent=mem.intent,
             key_details=str(mem.key_details) if mem.key_details else None,
             routed_department_id=self.routed_department_id,
+            taken_over_by=self.taken_over_by_id,
         )
         self.call_log.info("session saved to db")
 
