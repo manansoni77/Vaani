@@ -32,11 +32,13 @@ export function TicketPanel({ ticket, onClose, onUpdate }: Props) {
 
   const canResolve =
     ticket.status === "in_progress" &&
-    (ticket.assigned_to === profile?.email || role === "super_admin" || role === "dept_admin" || role === "call_center_admin");
+    role != null &&
+    ["super_admin", "call_center_admin", "call_center_user", "dept_admin", "dept_user"].includes(role);
 
   const canClose =
     ticket.status === "resolved" &&
-    (role === "super_admin" || role === "dept_admin" || role === "call_center_admin");
+    role != null &&
+    ["super_admin", "call_center_admin", "dept_admin"].includes(role);
 
   const canReroute =
     role != null &&

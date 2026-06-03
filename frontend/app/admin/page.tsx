@@ -8,7 +8,7 @@ import { PAGE_SIZE } from "@/lib/constants";
 import { getApiToken } from "@/lib/apiClient";
 import { getSessions, getTickets, claimTicket } from "@/lib/api";
 import type { Session, SessionEvent, Ticket, WsStatus } from "@/lib/types";
-import { AgentIdModal } from "@/components/admin/AgentIdModal";
+import { useUser } from "@/contexts/UserContext";
 import { TabButton } from "@/components/admin/TabButton";
 import { SessionCard } from "@/components/admin/SessionCard";
 import { DetailPanel } from "@/components/admin/DetailPanel";
@@ -17,34 +17,13 @@ import { TicketPanel } from "@/components/admin/TicketPanel";
 import { WsStatusBadge } from "@/components/admin/badges";
 import { SpinnerIcon } from "@/components/ui/icons";
 
-type Tab = "live" | "in_review" | "in_progress" | "completed";
-
-const TICKET_TAB_STATUSES: Partial<Record<Tab, string[]>> = {
-  in_review: ["in_review"],
-  in_progress: ["in_progress"],
-  completed: ["resolved", "closed"],
-};
+type Tab = "live" | "in_review" | "in_progress" | "resolved" | "closed";
 
 export default function AdminPage() {
   const [tab, setTab] = useState<Tab>("live");
 
-  // Agent identity
-  const [agentId, setAgentId] = useState("");
-  const [showAgentModal, setShowAgentModal] = useState(false);
-
-  useEffect(() => {
-    const stored = localStorage.getItem("vaani_agent_id");
-    setTimeout(() => {
-      if (stored) setAgentId(stored);
-      else setShowAgentModal(true);
-    }, 0);
-  }, []);
-
-  const saveAgentId = (id: string) => {
-    localStorage.setItem("vaani_agent_id", id);
-    setAgentId(id);
-    setShowAgentModal(false);
-  };
+  const { profile } = useUser();
+  const agentId = profile?.email ?? "";
 
   // Live tab
   const [sessions, setSessions] = useState<Record<string, Session>>({});
@@ -71,14 +50,21 @@ export default function AdminPage() {
   const inProgressOffsetRef = useRef(0);
   const inProgressFetchedRef = useRef(false);
 
-  // Completed tab (resolved + closed merged)
-  const [completedTickets, setCompletedTickets] = useState<Ticket[]>([]);
-  const [completedHasMore, setCompletedHasMore] = useState(false);
-  const [completedLoading, setCompletedLoading] = useState(false);
-  const [completedFetched, setCompletedFetched] = useState(false);
-  const completedResolvedOffsetRef = useRef(0);
-  const completedClosedOffsetRef = useRef(0);
-  const completedFetchedRef = useRef(false);
+  // Resolved tab
+  const [resolvedTickets, setResolvedTickets] = useState<Ticket[]>([]);
+  const [resolvedHasMore, setResolvedHasMore] = useState(false);
+  const [resolvedLoading, setResolvedLoading] = useState(false);
+  const [resolvedFetched, setResolvedFetched] = useState(false);
+  const resolvedOffsetRef = useRef(0);
+  const resolvedFetchedRef = useRef(false);
+
+  // Closed tab
+  const [closedTickets, setClosedTickets] = useState<Ticket[]>([]);
+  const [closedHasMore, setClosedHasMore] = useState(false);
+  const [closedLoading, setClosedLoading] = useState(false);
+  const [closedFetched, setClosedFetched] = useState(false);
+  const closedOffsetRef = useRef(0);
+  const closedFetchedRef = useRef(false);
 
   // Shared panel
   const [panelWidth, setPanelWidth] = useState(480);
@@ -96,7 +82,9 @@ export default function AdminPage() {
     ws.onopen = () => setWsStatus("connected");
     ws.onmessage = (e) => {
       try {
-        const event: SessionEvent = JSON.parse(e.data as string);
+        const msg = JSON.parse(e.data as string) as { type?: string } & SessionEvent;
+        if (msg.type === "ping") return;
+        const event = msg;
         if (event.event_type === "session_ended") {
           setSessions((prev) => {
             const next = { ...prev };
@@ -207,53 +195,77 @@ export default function AdminPage() {
     }
   }, []);
 
-  const HALF_PAGE = Math.ceil(PAGE_SIZE / 2);
-
-  const fetchCompleted = useCallback(async () => {
-    setCompletedLoading(true);
+  const fetchResolved = useCallback(async () => {
+    setResolvedLoading(true);
     try {
-      const [resolved, closed] = await Promise.all([
-        getTickets({ status: "resolved", limit: HALF_PAGE, offset: 0 }),
-        getTickets({ status: "closed", limit: HALF_PAGE, offset: 0 }),
-      ]);
-      completedResolvedOffsetRef.current = resolved.length;
-      completedClosedOffsetRef.current = closed.length;
-      const merged = [...resolved, ...closed].sort(
-        (a, b) => new Date(b.created_at).getTime() - new Date(a.created_at).getTime(),
-      );
-      setCompletedTickets(merged);
-      setCompletedHasMore(resolved.length === HALF_PAGE || closed.length === HALF_PAGE);
-      setCompletedFetched(true);
+      const data = await getTickets({ status: "resolved", limit: PAGE_SIZE, offset: 0 });
+      setResolvedTickets(data);
+      resolvedOffsetRef.current = data.length;
+      setResolvedHasMore(data.length === PAGE_SIZE);
+      setResolvedFetched(true);
     } catch {
-      setCompletedFetched(true);
+      setResolvedFetched(true);
     } finally {
-      setCompletedLoading(false);
+      setResolvedLoading(false);
     }
-  }, [HALF_PAGE]);
+  }, []);
 
-  const loadMoreCompleted = useCallback(async () => {
-    setCompletedLoading(true);
+  const loadMoreResolved = useCallback(async () => {
+    setResolvedLoading(true);
     try {
-      const [resolved, closed] = await Promise.all([
-        getTickets({ status: "resolved", limit: HALF_PAGE, offset: completedResolvedOffsetRef.current }),
-        getTickets({ status: "closed", limit: HALF_PAGE, offset: completedClosedOffsetRef.current }),
-      ]);
-      completedResolvedOffsetRef.current += resolved.length;
-      completedClosedOffsetRef.current += closed.length;
-      setCompletedTickets((prev) => {
-        const seen = new Set(prev.map((t) => t.id));
-        const fresh = [...resolved, ...closed].filter((t) => !seen.has(t.id));
-        return [...prev, ...fresh].sort(
-          (a, b) => new Date(b.created_at).getTime() - new Date(a.created_at).getTime(),
-        );
+      const data = await getTickets({
+        status: "resolved",
+        limit: PAGE_SIZE,
+        offset: resolvedOffsetRef.current,
       });
-      setCompletedHasMore(resolved.length === HALF_PAGE || closed.length === HALF_PAGE);
+      setResolvedTickets((prev) => {
+        const seen = new Set(prev.map((t) => t.id));
+        return [...prev, ...data.filter((t) => !seen.has(t.id))];
+      });
+      resolvedOffsetRef.current += data.length;
+      setResolvedHasMore(data.length === PAGE_SIZE);
     } catch {
       // silently fail
     } finally {
-      setCompletedLoading(false);
+      setResolvedLoading(false);
     }
-  }, [HALF_PAGE]);
+  }, []);
+
+  const fetchClosed = useCallback(async () => {
+    setClosedLoading(true);
+    try {
+      const data = await getTickets({ status: "closed", limit: PAGE_SIZE, offset: 0 });
+      setClosedTickets(data);
+      closedOffsetRef.current = data.length;
+      setClosedHasMore(data.length === PAGE_SIZE);
+      setClosedFetched(true);
+    } catch {
+      setClosedFetched(true);
+    } finally {
+      setClosedLoading(false);
+    }
+  }, []);
+
+  const loadMoreClosed = useCallback(async () => {
+    setClosedLoading(true);
+    try {
+      const data = await getTickets({
+        status: "closed",
+        limit: PAGE_SIZE,
+        offset: closedOffsetRef.current,
+      });
+      setClosedTickets((prev) => {
+        const seen = new Set(prev.map((t) => t.id));
+        return [...prev, ...data.filter((t) => !seen.has(t.id))];
+      });
+      closedOffsetRef.current += data.length;
+      setClosedHasMore(data.length === PAGE_SIZE);
+    } catch {
+      // silently fail
+    } finally {
+      setClosedLoading(false);
+    }
+  }, []);
 
   // Lazy fetch on first tab focus
   useEffect(() => {
@@ -265,11 +277,15 @@ export default function AdminPage() {
       inProgressFetchedRef.current = true;
       fetchInProgress();
     }
-    if (tab === "completed" && !completedFetchedRef.current) {
-      completedFetchedRef.current = true;
-      fetchCompleted();
+    if (tab === "resolved" && !resolvedFetchedRef.current) {
+      resolvedFetchedRef.current = true;
+      fetchResolved();
     }
-  }, [tab, fetchInReview, fetchInProgress, fetchCompleted]);
+    if (tab === "closed" && !closedFetchedRef.current) {
+      closedFetchedRef.current = true;
+      fetchClosed();
+    }
+  }, [tab, fetchInReview, fetchInProgress, fetchResolved, fetchClosed]);
 
   const switchTab = (t: Tab) => {
     setTab(t);
@@ -283,7 +299,8 @@ export default function AdminPage() {
       list.map((t) => (t.id === updated.id ? updated : t));
     setInReviewTickets(update);
     setInProgressTickets(update);
-    setCompletedTickets(update);
+    setResolvedTickets(update);
+    setClosedTickets(update);
     setSelectedTicket(updated);
   }, []);
 
@@ -296,44 +313,51 @@ export default function AdminPage() {
       ? inReviewTickets
       : tab === "in_progress"
         ? inProgressTickets
-        : completedTickets;
+        : tab === "resolved"
+          ? resolvedTickets
+          : closedTickets;
 
   const currentHasMore =
     tab === "in_review"
       ? inReviewHasMore
       : tab === "in_progress"
         ? inProgressHasMore
-        : completedHasMore;
+        : tab === "resolved"
+          ? resolvedHasMore
+          : closedHasMore;
 
   const currentLoading =
     tab === "in_review"
       ? inReviewLoading
       : tab === "in_progress"
         ? inProgressLoading
-        : completedLoading;
+        : tab === "resolved"
+          ? resolvedLoading
+          : closedLoading;
 
   const currentFetched =
     tab === "in_review"
       ? inReviewFetched
       : tab === "in_progress"
         ? inProgressFetched
-        : completedFetched;
+        : tab === "resolved"
+          ? resolvedFetched
+          : closedFetched;
 
   const loadMore =
     tab === "in_review"
       ? loadMoreInReview
       : tab === "in_progress"
         ? loadMoreInProgress
-        : loadMoreCompleted;
+        : tab === "resolved"
+          ? loadMoreResolved
+          : loadMoreClosed;
 
   const isLive = tab === "live";
-  const isTicketTab = !isLive;
   const showPanel = isLive ? !!selectedSession : !!selectedTicket;
 
   return (
     <>
-      {showAgentModal && <AgentIdModal onSave={saveAgentId} />}
-
       <div className="h-screen flex flex-col bg-linear-to-br from-green-50 to-emerald-100 dark:from-slate-900 dark:to-slate-800">
         {/* Header */}
         <header className="shrink-0 flex items-center justify-between px-5 py-3 bg-white/90 dark:bg-slate-900/90 backdrop-blur-sm border-b border-slate-200 dark:border-slate-700">
@@ -352,13 +376,10 @@ export default function AdminPage() {
             )}
           </div>
           <div className="flex items-center gap-3">
-            {agentId && (
-              <button
-                onClick={() => setShowAgentModal(true)}
-                className="text-xs text-slate-400 dark:text-slate-500 hover:text-slate-600 dark:hover:text-slate-300 transition-colors"
-              >
-                {agentId}
-              </button>
+            {profile?.name && (
+              <span className="text-xs text-slate-400 dark:text-slate-500">
+                {profile.name}
+              </span>
             )}
             {isLive && (
               <span className="text-sm text-slate-500 dark:text-slate-400">
@@ -406,8 +427,11 @@ export default function AdminPage() {
               </span>
             )}
           </TabButton>
-          <TabButton active={tab === "completed"} onClick={() => switchTab("completed")}>
-            Completed
+          <TabButton active={tab === "resolved"} onClick={() => switchTab("resolved")}>
+            Resolved
+          </TabButton>
+          <TabButton active={tab === "closed"} onClick={() => switchTab("closed")}>
+            Closed
           </TabButton>
         </div>
 
@@ -441,61 +465,58 @@ export default function AdminPage() {
                 )}
               </div>
             ) : (
-              <div className="flex flex-col">
-                {/* Ticket list + load more */}
-                <div className="p-4 flex flex-col gap-4">
-                  {currentLoading && currentTickets.length === 0 ? (
-                    <div className="flex items-center justify-center py-32 gap-2 text-slate-400 dark:text-slate-500">
-                      <SpinnerIcon className="w-5 h-5 animate-spin" />
-                      <span className="text-sm">Loading…</span>
-                    </div>
-                  ) : currentFetched && currentTickets.length === 0 ? (
-                    <div className="flex flex-col items-center justify-center py-32 text-slate-400 dark:text-slate-500 gap-2">
-                      <p className="text-base font-medium">No tickets</p>
-                      <p className="text-sm">Nothing here yet</p>
-                    </div>
-                  ) : (
-                    <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3">
-                      {currentTickets.map((t) => (
-                        <TicketCard
-                          key={t.id}
-                          ticket={t}
-                          selected={selectedTicket?.id === t.id}
-                          onClick={() =>
-                            setSelectedTicket((prev) =>
-                              prev?.id === t.id ? null : t,
-                            )
-                          }
-                          onClaim={
-                            t.status === "in_review"
-                              ? async () => {
-                                  try {
-                                    const updated = await claimTicket(t.id);
-                                    handleTicketUpdate(updated);
-                                  } catch {
-                                    // silently fail — panel will show the error state
-                                  }
+              <div className="p-4 flex flex-col gap-4">
+                {currentLoading && currentTickets.length === 0 ? (
+                  <div className="flex items-center justify-center py-32 gap-2 text-slate-400 dark:text-slate-500">
+                    <SpinnerIcon className="w-5 h-5 animate-spin" />
+                    <span className="text-sm">Loading…</span>
+                  </div>
+                ) : currentFetched && currentTickets.length === 0 ? (
+                  <div className="flex flex-col items-center justify-center py-32 text-slate-400 dark:text-slate-500 gap-2">
+                    <p className="text-base font-medium">No tickets</p>
+                    <p className="text-sm">Nothing here yet</p>
+                  </div>
+                ) : (
+                  <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3">
+                    {currentTickets.map((t) => (
+                      <TicketCard
+                        key={t.id}
+                        ticket={t}
+                        selected={selectedTicket?.id === t.id}
+                        onClick={() =>
+                          setSelectedTicket((prev) =>
+                            prev?.id === t.id ? null : t,
+                          )
+                        }
+                        onClaim={
+                          t.status === "in_review"
+                            ? async () => {
+                                try {
+                                  const updated = await claimTicket(t.id);
+                                  handleTicketUpdate(updated);
+                                } catch {
+                                  // silently fail — panel will show the error state
                                 }
-                              : undefined
-                          }
-                        />
-                      ))}
-                    </div>
-                  )}
+                              }
+                            : undefined
+                        }
+                      />
+                    ))}
+                  </div>
+                )}
 
-                  {(currentHasMore || (currentLoading && currentTickets.length > 0)) && (
-                    <div className="flex justify-center">
-                      <button
-                        onClick={loadMore}
-                        disabled={currentLoading}
-                        className="px-5 py-2 bg-green-600 hover:bg-green-700 disabled:opacity-50 text-white text-sm font-semibold rounded-lg transition-colors flex items-center gap-2"
-                      >
-                        {currentLoading && <SpinnerIcon className="w-4 h-4 animate-spin" />}
-                        {currentLoading ? "Loading…" : "Load More"}
-                      </button>
-                    </div>
-                  )}
-                </div>
+                {(currentHasMore || (currentLoading && currentTickets.length > 0)) && (
+                  <div className="flex justify-center">
+                    <button
+                      onClick={loadMore}
+                      disabled={currentLoading}
+                      className="px-5 py-2 bg-green-600 hover:bg-green-700 disabled:opacity-50 text-white text-sm font-semibold rounded-lg transition-colors flex items-center gap-2"
+                    >
+                      {currentLoading && <SpinnerIcon className="w-4 h-4 animate-spin" />}
+                      {currentLoading ? "Loading…" : "Load More"}
+                    </button>
+                  </div>
+                )}
               </div>
             )}
           </div>
