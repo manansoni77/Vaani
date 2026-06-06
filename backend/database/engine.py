@@ -13,11 +13,12 @@ _engine = None
 
 
 def _patch_jsonb_for_sqlite() -> None:
-    """Swap JSONB → JSON on the tickets table so SQLite can compile it."""
-    from .models import Ticket
-    col = Ticket.__table__.c.get("extracted_entities")
-    if col is not None and isinstance(col.type, JSONB):
-        col.type = JSON()
+    """Swap every JSONB column → JSON across all models so SQLite can compile them."""
+    import database.models  # noqa: F401 — ensure all models are registered
+    for table in Base.metadata.tables.values():
+        for col in table.columns:
+            if isinstance(col.type, JSONB):
+                col.type = JSON()
 
 
 def get_engine():

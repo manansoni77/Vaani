@@ -83,6 +83,7 @@ class Ticket(Base):
     reopen_count = Column(Integer, nullable=False, default=0)
     description = Column(Text, nullable=True)
     extracted_entities = Column(JSONB, nullable=True)
+    comments = Column(JSONB, nullable=True)          # list[{"msg": str, "by": "user_<id>" | "system"}]
     approved_by = Column(Integer, ForeignKey("staff_users.id"), nullable=True)
     created_at = Column(String, nullable=True)
     updated_at = Column(String, nullable=True)

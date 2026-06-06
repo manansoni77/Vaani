@@ -1,10 +1,11 @@
 from datetime import datetime, timezone
-from typing import Literal
+from typing import Literal, cast
 
 from fastapi import APIRouter, Depends, HTTPException, Query
 from pydantic import BaseModel
 from sqlalchemy import or_
 from sqlalchemy.orm import Session
+from sqlalchemy.orm.attributes import flag_modified
 
 from database import CallSessionRecord, Department, Ticket, get_engine
 from constants import ROLE_TYPE
@@ -35,15 +36,20 @@ class TicketOut(BaseModel):
     description: str | None
     created_at: str | None
     updated_at: str | None
-    session_id: str | None  # from linked CallSessionRecord
+    session_ids: list[str]
+    comments: list[dict]
 
 
 class RerouteRequest(BaseModel):
-    department_id: int | None = None  # None = send back to call center
+    department_id: int | None = None
 
 
 class StatusUpdateRequest(BaseModel):
     status: Literal["in_review", "in_progress", "resolved", "closed"]
+
+
+class CommentRequest(BaseModel):
+    msg: str
 
 
 # ── helpers ───────────────────────────────────────────────────────────────────
@@ -51,7 +57,7 @@ class StatusUpdateRequest(BaseModel):
 def _apply_visibility(q, role: ROLE_TYPE, caller_id: int, dept_id: int | None):
     """Apply role-based visibility filter to a Ticket query."""
     if role == ROLE_TYPE.SUPER_ADMIN:
-        pass  # sees everything
+        pass
     elif role == ROLE_TYPE.CALL_CENTER_ADMIN:
         q = q.filter(Ticket.routed_department_id == None)  # noqa: E711
     elif role == ROLE_TYPE.CALL_CENTER_USER:
@@ -67,7 +73,15 @@ def _apply_visibility(q, role: ROLE_TYPE, caller_id: int, dept_id: int | None):
     return q
 
 
-def _ticket_to_out(ticket: Ticket, session_id: str | None) -> TicketOut:
+def _add_comment(db: Session, ticket: Ticket, msg: str, by: str) -> None:
+    """Append a comment to ticket.comments and mark the column as modified."""
+    existing: list[dict] = list(ticket.comments or [])
+    existing.append({"msg": msg, "by": by})
+    ticket.comments = existing  # type: ignore[assignment]
+    flag_modified(ticket, "comments")  # tell SQLAlchemy the JSON column changed
+
+
+def _ticket_to_out(ticket: Ticket, session_ids: list[str]) -> TicketOut:
     return TicketOut(
         id=ticket.id,  # type: ignore[arg-type]
         status=str(ticket.status),
@@ -78,8 +92,14 @@ def _ticket_to_out(ticket: Ticket, session_id: str | None) -> TicketOut:
         description=str(ticket.description) if ticket.description is not None else None,
         created_at=str(ticket.created_at) if ticket.created_at is not None else None,
         updated_at=str(ticket.updated_at) if ticket.updated_at is not None else None,
-        session_id=session_id,
+        session_ids=session_ids,
+        comments=list(ticket.comments or []),
     )
+
+
+def _get_session_ids(db: Session, ticket_id: int) -> list[str]:
+    rows = db.query(CallSessionRecord.session_id).filter(CallSessionRecord.ticket_id == ticket_id).all()
+    return [str(r.session_id) for r in rows]
 
 
 # ── endpoints ─────────────────────────────────────────────────────────────────
@@ -115,18 +135,47 @@ def list_tickets(
 
         tickets = q.order_by(Ticket.id.desc()).offset(offset).limit(limit).all()
 
-        # Fetch linked session_id for each ticket
-        ticket_ids = [t.id for t in tickets]
-        session_map: dict[int, str] = {}
+        ticket_ids = [cast(int, t.id) for t in tickets]
+        session_map: dict[int, list[str]] = {cast(int, t.id): [] for t in tickets}
         if ticket_ids:
             rows = (
                 db.query(CallSessionRecord.ticket_id, CallSessionRecord.session_id)
                 .filter(CallSessionRecord.ticket_id.in_(ticket_ids))
                 .all()
             )
-            session_map = {row.ticket_id: row.session_id for row in rows}
+            for row in rows:
+                session_map.setdefault(cast(int, row.ticket_id), []).append(str(row.session_id))
 
-    return [_ticket_to_out(t, session_map.get(t.id)) for t in tickets]
+    return [_ticket_to_out(t, session_map.get(cast(int, t.id), [])) for t in tickets]
+
+
+@router.post("/{ticket_id}/comment", response_model=TicketOut)
+def add_comment(
+    ticket_id: int,
+    body: CommentRequest,
+    claims: dict = Depends(require_roles(*_TICKET_ROLES)),
+) -> TicketOut:
+    """Add a comment to a ticket. Any user who can see the ticket may comment."""
+    role      = ROLE_TYPE(claims["role_type"])
+    caller_id = int(claims["sub"])
+    dept_id   = claims.get("department_id")
+    now       = datetime.now(timezone.utc).isoformat(timespec="milliseconds")
+
+    with Session(get_engine()) as db:
+        q = db.query(Ticket).filter(Ticket.id == ticket_id)
+        q = _apply_visibility(q, role, caller_id, dept_id)
+        ticket = q.first()
+
+        if ticket is None:
+            raise HTTPException(status_code=404, detail="ticket not found")
+
+        _add_comment(db, ticket, body.msg, f"user_{caller_id}")
+        ticket.updated_at = now  # type: ignore[assignment]
+        db.commit()
+        db.refresh(ticket)
+        session_id = _get_session_ids(db, ticket_id)
+
+    return _ticket_to_out(ticket, session_id)
 
 
 @router.post("/{ticket_id}/claim", response_model=TicketOut)
@@ -156,11 +205,10 @@ def claim_ticket(
         ticket.assigned_to = caller_id  # type: ignore[assignment]
         ticket.status      = "in_progress"  # type: ignore[assignment]
         ticket.updated_at  = now  # type: ignore[assignment]
+        _add_comment(db, ticket, f"Ticket claimed by {claims['name']}", f"user_{caller_id}")
         db.commit()
         db.refresh(ticket)
-
-        rec = db.query(CallSessionRecord).filter(CallSessionRecord.ticket_id == ticket_id).first()
-        session_id = str(rec.session_id) if rec else None
+        session_id = _get_session_ids(db, ticket_id)
 
     return _ticket_to_out(ticket, session_id)
 
@@ -178,7 +226,8 @@ def reroute_ticket(
     Resets status to in_review and clears assigned_to regardless of current state.
     Only allowed when ticket is not already closed.
     """
-    now = datetime.now(timezone.utc).isoformat(timespec="milliseconds")
+    caller_id = int(claims["sub"])
+    now       = datetime.now(timezone.utc).isoformat(timespec="milliseconds")
 
     with Session(get_engine()) as db:
         ticket = db.query(Ticket).filter(Ticket.id == ticket_id).first()
@@ -187,22 +236,36 @@ def reroute_ticket(
         if ticket.status == "closed":
             raise HTTPException(status_code=409, detail="closed tickets cannot be rerouted")
 
+        # Resolve previous department name
+        if ticket.routed_department_id is not None:
+            prev_dept = db.query(Department).filter(Department.id == ticket.routed_department_id).first()
+            prev_dept_name = str(prev_dept.name) if prev_dept else "unknown"
+        else:
+            prev_dept_name = "call center"
+
+        # Resolve new department name and validate
         if body.department_id is not None:
             dept = db.query(Department).filter(Department.id == body.department_id).first()
             if dept is None:
                 raise HTTPException(status_code=404, detail="department not found")
             if dept.active is False:
                 raise HTTPException(status_code=422, detail="department is inactive")
+            new_dept_name = str(dept.name)
+        else:
+            new_dept_name = "call center"
 
         ticket.routed_department_id = body.department_id  # type: ignore[assignment]
         ticket.assigned_to          = None  # type: ignore[assignment]
         ticket.status               = "in_review"  # type: ignore[assignment]
         ticket.updated_at           = now  # type: ignore[assignment]
+        _add_comment(
+            db, ticket,
+            f"Ticket rerouted from {prev_dept_name!r} to {new_dept_name!r} by {claims['name']}",
+            f"user_{caller_id}",
+        )
         db.commit()
         db.refresh(ticket)
-
-        rec = db.query(CallSessionRecord).filter(CallSessionRecord.ticket_id == ticket_id).first()
-        session_id = str(rec.session_id) if rec else None
+        session_id = _get_session_ids(db, ticket_id)
 
     return _ticket_to_out(ticket, session_id)
 
@@ -216,7 +279,7 @@ def update_ticket_status(
     """Update ticket status.
 
     Allowed transitions per role:
-    - dept_user / call_center_user  → resolved (own tickets only)
+    - dept_user / call_center_user   → resolved (own tickets only)
     - dept_admin / call_center_admin → resolved, closed (dept tickets)
     - super_admin                    → any status
     """
@@ -234,8 +297,6 @@ def update_ticket_status(
             raise HTTPException(status_code=404, detail="ticket not found")
 
         new_status = body.status
-
-        # Enforce transition rules
         _user_roles  = {ROLE_TYPE.DEPT_USER, ROLE_TYPE.CALL_CENTER_USER}
         _admin_roles = {ROLE_TYPE.DEPT_ADMIN, ROLE_TYPE.CALL_CENTER_ADMIN}
 
@@ -247,14 +308,17 @@ def update_ticket_status(
         elif role in _admin_roles:
             if new_status not in ("resolved", "closed"):
                 raise HTTPException(status_code=403, detail="admins can only set resolved or closed")
-        # super_admin: unrestricted
 
+        prev_status = str(ticket.status)
         ticket.status     = new_status  # type: ignore[assignment]
         ticket.updated_at = now  # type: ignore[assignment]
+        _add_comment(
+            db, ticket,
+            f"Status changed from {prev_status!r} to {new_status!r} by {claims['name']}",
+            f"user_{caller_id}",
+        )
         db.commit()
         db.refresh(ticket)
-
-        rec = db.query(CallSessionRecord).filter(CallSessionRecord.ticket_id == ticket_id).first()
-        session_id = str(rec.session_id) if rec else None
+        session_id = _get_session_ids(db, ticket_id)
 
     return _ticket_to_out(ticket, session_id)
