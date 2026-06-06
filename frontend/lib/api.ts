@@ -218,3 +218,12 @@ export function updateTicketStatus(id: number, status: TicketStatus): Promise<Ti
     body: JSON.stringify({ status }),
   });
 }
+
+/** POST /tickets/{id}/comment — add a manual comment to a ticket. */
+export function addTicketComment(id: number, msg: string): Promise<Ticket> {
+  return apiFetch<Ticket>(`/tickets/${id}/comment`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ msg }),
+  });
+}

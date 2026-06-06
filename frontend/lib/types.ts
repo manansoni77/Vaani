@@ -52,6 +52,11 @@ export interface SessionEvent extends Session {
 
 export type TicketStatus = "in_review" | "in_progress" | "resolved" | "closed";
 
+export interface TicketComment {
+  msg: string;
+  by: string;
+}
+
 export interface Ticket {
   id: number;
   status: TicketStatus;
@@ -62,7 +67,8 @@ export interface Ticket {
   description: string | null;
   created_at: string;
   updated_at: string;
-  session_id: string;
+  session_ids: string[];
+  comments: TicketComment[];
 }
 
 // ---------------------------------------------------------------------------
