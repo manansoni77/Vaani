@@ -31,3 +31,9 @@ TTS_PROVIDER = os.getenv("TTS_PROVIDER", "sarvam")
 # When True, audio is only forwarded to Sarvam STT while the frontend VAD reports speaking=true.
 # When False (default), all audio is forwarded and Sarvam's internal VAD handles filtering.
 VAD_GATE_STT: bool = os.getenv("VAD_GATE_STT", "0") not in ("0", "false", "no")
+
+# Auth
+GOOGLE_CLIENT_ID = os.getenv("GOOGLE_CLIENT_ID")                       # Google OAuth2 client ID — required for /auth/google
+JWT_SECRET       = os.getenv("JWT_SECRET", "change-me-in-production")  # HMAC secret for signing app JWTs
+JWT_ALGORITHM    = "HS256"
+JWT_EXPIRE_SECS  = int(os.getenv("JWT_EXPIRE_SECS", "3600"))

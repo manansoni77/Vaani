@@ -58,7 +58,7 @@ export function SessionCard({ session, live, selected, onClick }: Props) {
       <div className="flex flex-wrap gap-1.5">
         <PhaseBadge phase={session.phase} />
         <SentimentBadge sentiment={session.sentiment} />
-        <UrgencyBadge urgency={session.urgency_level} />
+        <UrgencyBadge urgencyScore={session.urgency_score} />
         {session.human_requested && (
           <span className="text-xs px-2 py-0.5 rounded-full bg-orange-100 text-orange-700 dark:bg-orange-900/50 dark:text-orange-300 font-semibold">
             Human Req.

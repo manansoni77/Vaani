@@ -27,7 +27,7 @@ def save_call_session(
     user_score: float | None = None,
     urgency_score: float | None = None,
     query_type: str | None = None,
-    routed_department: str | None = None,
+    routed_department_id: int | None = None,
     taken_over_by: int | None = None,
 ) -> None:
     try:
@@ -47,11 +47,19 @@ def save_call_session(
                 caller.last_call_language = language # type: ignore
                 caller.updated_at = ended_at # type: ignore
 
-            # 2. create ticket for this call
+            # 2. create ticket — status and assignment depend on whether a human handled the call
+            if taken_over_by is not None:
+                ticket_status   = "in_progress"
+                ticket_assigned = taken_over_by
+            else:
+                ticket_status   = "in_review"
+                ticket_assigned = None
+
             ticket = Ticket(
                 caller_id=caller.id,
-                routed_department=routed_department,
-                status="open",
+                routed_department_id=routed_department_id,
+                assigned_to=ticket_assigned,
+                status=ticket_status,
                 priority="normal",
                 created_at=started_at,
                 updated_at=ended_at,

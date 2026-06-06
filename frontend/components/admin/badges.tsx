@@ -1,4 +1,4 @@
-import type { Phase, Sentiment, Urgency, WsStatus, Session } from "@/lib/types";
+import type { Phase, Sentiment, WsStatus, Session, TicketStatus } from "@/lib/types";
 import type { SpeakerState } from "@/lib/hooks/useAudioStream";
 import { UserIcon } from "@/components/ui/icons";
 
@@ -49,26 +49,36 @@ export function SentimentBadge({ sentiment }: { sentiment: Sentiment }) {
 // UrgencyBadge
 // ---------------------------------------------------------------------------
 
-const URGENCY_STYLES: Record<Urgency, string> = {
+type UrgencyLevel = "none" | "low" | "medium" | "high";
+
+const URGENCY_STYLES: Record<UrgencyLevel, string> = {
   none: "bg-slate-100 text-slate-500 dark:bg-slate-700 dark:text-slate-400",
   low: "bg-blue-100 text-blue-600 dark:bg-blue-900/50 dark:text-blue-300",
   medium: "bg-amber-100 text-amber-700 dark:bg-amber-900/50 dark:text-amber-300",
   high: "bg-red-100 text-red-700 dark:bg-red-900/50 dark:text-red-300",
 };
 
-const URGENCY_LABELS: Record<Urgency, string> = {
+const URGENCY_LABELS: Record<UrgencyLevel, string> = {
   none: "No urgency",
   low: "Low urgency",
   medium: "Medium urgency",
   high: "High urgency",
 };
 
-export function UrgencyBadge({ urgency }: { urgency: Urgency }) {
+function scoreToUrgency(score: number): UrgencyLevel {
+  if (score >= 0.75) return "high";
+  if (score >= 0.5) return "medium";
+  if (score >= 0.25) return "low";
+  return "none";
+}
+
+export function UrgencyBadge({ urgencyScore }: { urgencyScore: number }) {
+  const level = scoreToUrgency(urgencyScore);
   return (
     <span
-      className={`text-xs px-2 py-0.5 rounded-full font-medium ${URGENCY_STYLES[urgency]}`}
+      className={`text-xs px-2 py-0.5 rounded-full font-medium ${URGENCY_STYLES[level]}`}
     >
-      {URGENCY_LABELS[urgency]}
+      {URGENCY_LABELS[level]}
     </span>
   );
 }
@@ -85,11 +95,13 @@ const CONFIDENCE_STYLES: Record<"GREEN" | "YELLOW" | "RED", string> = {
 
 export function ConfidenceBadge({
   label,
-  level,
+  score,
 }: {
   label: string;
-  level: "GREEN" | "YELLOW" | "RED";
+  score: number | null;
 }) {
+  if (score === null || score === undefined) return null;
+  const level = score >= 0.7 ? "GREEN" : score >= 0.4 ? "YELLOW" : "RED";
   return (
     <span
       className={`text-xs px-2 py-0.5 rounded-full font-semibold ${CONFIDENCE_STYLES[level]}`}
@@ -104,25 +116,18 @@ export function ConfidenceBadge({
 // ---------------------------------------------------------------------------
 
 const QUERY_TYPE_STYLES: Record<string, { badge: string; label: string }> = {
-  EMERGENCY: {
-    badge: "bg-red-100 text-red-700 dark:bg-red-900/50 dark:text-red-300",
-    label: "Emergency",
+  GRIEVANCE: {
+    badge: "bg-purple-100 text-purple-700 dark:bg-purple-900/50 dark:text-purple-300",
+    label: "Grievance",
   },
-  MUNICIPALITY: {
-    badge: "bg-amber-100 text-amber-700 dark:bg-amber-900/50 dark:text-amber-300",
-    label: "Municipality",
-  },
-  GENERAL: {
+  ENQUIRY: {
     badge: "bg-blue-100 text-blue-700 dark:bg-blue-900/50 dark:text-blue-300",
-    label: "General",
+    label: "Enquiry",
   },
-};
-
-const SERVICE_TYPE_LABELS: Record<string, string> = {
-  police: "Police",
-  medical: "Medical",
-  fire: "Fire",
-  disaster_relief: "Disaster Relief",
+  OTHERS: {
+    badge: "bg-slate-100 text-slate-600 dark:bg-slate-700 dark:text-slate-300",
+    label: "Others",
+  },
 };
 
 export function QueryTypeBadge({
@@ -142,16 +147,9 @@ export function QueryTypeBadge({
 
   return (
     <div className="flex flex-col gap-1">
-      <div className="flex flex-wrap items-center gap-1.5">
-        <span className={`text-xs px-2 py-0.5 rounded-full font-semibold ${badge}`}>
-          {label}
-        </span>
-        {qt === "EMERGENCY" && session.service_type && (
-          <span className="text-xs px-2 py-0.5 rounded-full font-semibold bg-red-50 text-red-600 dark:bg-red-900/30 dark:text-red-300 border border-red-200 dark:border-red-800">
-            {SERVICE_TYPE_LABELS[session.service_type] ?? session.service_type}
-          </span>
-        )}
-      </div>
+      <span className={`text-xs px-2 py-0.5 rounded-full font-semibold w-fit ${badge}`}>
+        {label}
+      </span>
       {session.location && (
         <p
           className={`text-xs text-slate-500 dark:text-slate-400 ${compact ? "truncate" : ""}`}
@@ -159,12 +157,40 @@ export function QueryTypeBadge({
           📍 {session.location}
         </p>
       )}
-      {qt === "MUNICIPALITY" && session.since_when && (
+      {session.since_when && (
         <p className="text-xs text-slate-500 dark:text-slate-400">
           Since: {session.since_when}
         </p>
       )}
     </div>
+  );
+}
+
+// ---------------------------------------------------------------------------
+// TicketStatusBadge
+// ---------------------------------------------------------------------------
+
+const TICKET_STATUS_STYLES: Record<TicketStatus, string> = {
+  in_review: "bg-amber-100 text-amber-700 dark:bg-amber-900/50 dark:text-amber-300",
+  in_progress: "bg-blue-100 text-blue-700 dark:bg-blue-900/50 dark:text-blue-300",
+  resolved: "bg-green-100 text-green-700 dark:bg-green-900/50 dark:text-green-300",
+  closed: "bg-slate-100 text-slate-500 dark:bg-slate-700 dark:text-slate-400",
+};
+
+const TICKET_STATUS_LABELS: Record<TicketStatus, string> = {
+  in_review: "In Review",
+  in_progress: "In Progress",
+  resolved: "Resolved",
+  closed: "Closed",
+};
+
+export function TicketStatusBadge({ status }: { status: TicketStatus }) {
+  return (
+    <span
+      className={`text-xs px-2 py-0.5 rounded-full font-semibold ${TICKET_STATUS_STYLES[status]}`}
+    >
+      {TICKET_STATUS_LABELS[status]}
+    </span>
   );
 }
 
