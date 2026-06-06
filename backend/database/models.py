@@ -21,7 +21,7 @@ class Department(Base):
 class Role(Base):
     __tablename__ = "roles"
     id            = Column(Integer, primary_key=True, autoincrement=True)
-    role_type     = Column(Enum(ROLE_TYPE), nullable=False)
+    role_type     = Column(Enum(ROLE_TYPE, native_enum=False), nullable=False)
     department_id = Column(Integer, ForeignKey("departments.id"), nullable=True)  # null for system roles
 
     department  = relationship("Department", back_populates="roles")

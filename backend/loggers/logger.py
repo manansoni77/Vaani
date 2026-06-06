@@ -15,12 +15,13 @@ class DBHandler(logging.Handler):
         from database import get_engine, LogEntry
         ts = datetime.now(timezone.utc).isoformat(timespec="milliseconds")
         entity = getattr(record, "entity", record.name)
-        session_id = getattr(record, "session_id", "NA")
+        raw_sid = getattr(record, "session_id", None)
+        session_id = raw_sid if raw_sid and raw_sid != "NA" else None
         try:
             with Session(get_engine()) as session:
                 session.add(
                     LogEntry(
-                        entity_type=entity,       # changed: was entity=entity
+                        entity_type=entity,
                         session_id=session_id,
                         level=record.levelname,
                         message=record.getMessage(),

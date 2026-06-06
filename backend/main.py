@@ -3,6 +3,7 @@ from contextlib import asynccontextmanager
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from config import R2_ACCOUNT_ID, R2_BUCKET_NAME
+from database import reset_tables
 from loggers import get_logger, setup_logging, LOG_ENTITIES
 from routers import auth_router, call_router, datasets_router, departments_router, logs_router, sessions_router, tickets_router, users_router
 
@@ -13,6 +14,7 @@ _app_log = get_logger(LOG_ENTITIES.APP)
 async def lifespan(_: FastAPI):
     print_logs = os.getenv("PRINT_LOGS", "1") not in ("0", "false", "no")
     setup_logging(print_logs=print_logs)
+    # reset_tables()
     _app_log.info("starting up")
     if R2_ACCOUNT_ID and R2_BUCKET_NAME:
         _app_log.info(f"R2 storage configured: bucket={R2_BUCKET_NAME}")
