@@ -23,7 +23,8 @@ class CallSession:
     websocket: WebSocket
     loop: asyncio.AbstractEventLoop
     session_start: float
-    phone_number: str = "unknown"           # added: caller's phone number
+    phone_number: str = "unknown"
+    caller_id: int | None = None            # Caller.id from DB — set at connect time
     # conversationState: ConversationState
 
     audio_chunks: list[bytes] = field(default_factory=list)
@@ -108,6 +109,8 @@ class CallSession:
             location=mem.location,
             since_when=mem.since_when,
             routed_department_id=self.routed_department_id,
+            caller_id=self.caller_id,
+            phone_number=self.phone_number,
         )
         SessionBroadcaster.get().publish(status)
         if event_type == "session_ended":
