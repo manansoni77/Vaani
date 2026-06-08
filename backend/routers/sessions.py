@@ -144,6 +144,31 @@ def list_completed_sessions(
         return [CallSessionOut.model_validate(row) for row in rows]
 
 
+@router.get("/history/{session_id}", response_model=CallSessionOut)
+def get_completed_session(
+    session_id: str,
+    claims: dict = Depends(require_roles(*_LIVE_SESSION_ROLES)),
+) -> CallSessionOut:
+    """Fetch a single completed call session by its session_id."""
+    role    = ROLE_TYPE(claims["role_type"])
+    dept_id = claims.get("department_id")
+
+    with Session(get_engine()) as db:
+        q = db.query(CallSessionRecord).filter(
+            CallSessionRecord.session_id == session_id
+        ).join(Ticket, CallSessionRecord.ticket_id == Ticket.id, isouter=True)
+
+        if role in (ROLE_TYPE.CALL_CENTER_ADMIN, ROLE_TYPE.CALL_CENTER_USER):
+            q = q.filter(Ticket.routed_department_id == None)  # noqa: E711
+        elif role in (ROLE_TYPE.DEPT_ADMIN, ROLE_TYPE.DEPT_USER):
+            q = q.filter(Ticket.routed_department_id == dept_id)
+
+        row = q.first()
+        if row is None:
+            raise HTTPException(status_code=404, detail="session not found")
+        return CallSessionOut.model_validate(row)
+
+
 @router.get("")
 async def list_sessions(
     claims: dict = Depends(require_roles(*_LIVE_SESSION_ROLES)),
@@ -151,6 +176,20 @@ async def list_sessions(
     """Return a snapshot of currently active call sessions visible to the caller."""
     all_sessions = list(SessionBroadcaster.get().active_sessions.values())
     return [s for s in all_sessions if _session_visible(claims, s)]
+
+
+@router.get("/{session_id}")
+async def get_live_session(
+    session_id: str,
+    claims: dict = Depends(require_roles(*_LIVE_SESSION_ROLES)),
+) -> dict:
+    """Fetch the current status of a single active (live) call session."""
+    status = SessionBroadcaster.get().active_sessions.get(session_id)
+    if status is None:
+        raise HTTPException(status_code=404, detail="session not found or not active")
+    if not _session_visible(claims, status):
+        raise HTTPException(status_code=403, detail="session not visible to your role")
+    return status
 
 
 @router.websocket("/stream")
