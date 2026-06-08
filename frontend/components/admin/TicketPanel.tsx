@@ -145,6 +145,12 @@ export function TicketPanel({ ticket, onClose, onUpdate }: Props) {
             {new Date(ticket.updated_at).toLocaleString()}
           </span>
         </div>
+        <div className="flex flex-col gap-0.5 bg-slate-50 dark:bg-slate-700/50 rounded-lg px-3 py-2.5 col-span-2">
+          <span className="text-xs text-slate-400">Caller</span>
+          <span className="text-xs font-mono text-slate-700 dark:text-slate-200">
+            #{ticket.caller_id}
+          </span>
+        </div>
       </div>
 
       {/* ── Description ── */}
