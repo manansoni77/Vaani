@@ -4,6 +4,7 @@ import { GoogleOAuthProvider } from "@react-oauth/google";
 import { AuthProvider } from "@/contexts/AuthContext";
 import { UserProvider } from "@/contexts/UserContext";
 import { DepartmentProvider } from "@/contexts/DepartmentContext";
+import { SessionProvider } from "@/contexts/SessionContext";
 import { AuthGuard } from "@/components/AuthGuard";
 import { GOOGLE_CLIENT_ID } from "@/lib/config";
 
@@ -26,7 +27,9 @@ export function Providers({ children }: { children: React.ReactNode }) {
       <AuthProvider>
         <UserProvider>
           <AuthGuard>
-            <DepartmentProvider>{children}</DepartmentProvider>
+            <DepartmentProvider>
+              <SessionProvider>{children}</SessionProvider>
+            </DepartmentProvider>
           </AuthGuard>
         </UserProvider>
       </AuthProvider>

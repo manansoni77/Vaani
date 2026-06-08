@@ -142,6 +142,16 @@ export function getSessionsHistory(params: SessionHistoryParams = {}): Promise<S
   return apiFetch<Session[]>(`/sessions/history${qs ? `?${qs}` : ""}`);
 }
 
+/** GET /sessions/history/{session_id} — fetch a single completed session. */
+export function getSessionHistoryById(sessionId: string): Promise<Session> {
+  return apiFetch<Session>(`/sessions/history/${encodeURIComponent(sessionId)}`);
+}
+
+/** GET /sessions/{session_id} — fetch a single live session's current state. */
+export function getSessionById(sessionId: string): Promise<Session> {
+  return apiFetch<Session>(`/sessions/${encodeURIComponent(sessionId)}`);
+}
+
 /** POST /sessions/{id}/takeover — claim a live session for human handling. */
 export function takeoverSession(
   sessionId: string,

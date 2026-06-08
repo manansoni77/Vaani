@@ -7,6 +7,7 @@ import { CloseIcon, SpinnerIcon } from "@/components/ui/icons";
 import { TicketStatusBadge } from "@/components/admin/badges";
 import { useDepartments } from "@/contexts/DepartmentContext";
 import { useUser } from "@/contexts/UserContext";
+import { SessionDetailPanel } from "@/components/admin/SessionDetailPanel";
 
 interface Props {
   ticket: Ticket;
@@ -30,6 +31,7 @@ export function TicketPanel({ ticket, onClose, onUpdate }: Props) {
   const [selectedDeptId, setSelectedDeptId] = useState<number | "">("");
   const [commentText, setCommentText] = useState("");
   const [commenting, setCommenting] = useState(false);
+  const [viewingSessionId, setViewingSessionId] = useState<string | null>(null);
 
   const role = profile?.accessLevel;
   const deptName = departments.find((d) => d.id === ticket.routed_department_id)?.name ?? null;
@@ -84,6 +86,15 @@ export function TicketPanel({ ticket, onClose, onUpdate }: Props) {
       setCommentText("");
     } finally { setCommenting(false); }
   };
+
+  if (viewingSessionId) {
+    return (
+      <SessionDetailPanel
+        sessionId={viewingSessionId}
+        onBack={() => setViewingSessionId(null)}
+      />
+    );
+  }
 
   return (
     <div className="p-4 flex flex-col gap-5 min-w-0">
@@ -158,12 +169,14 @@ export function TicketPanel({ ticket, onClose, onUpdate }: Props) {
           </span>
           <div className="flex flex-col gap-1">
             {ticket.session_ids.map((sid) => (
-              <span
+              <button
                 key={sid}
-                className="font-mono text-xs bg-slate-50 dark:bg-slate-700/50 rounded-lg px-3 py-1.5 text-slate-600 dark:text-slate-300 truncate"
+                onClick={() => setViewingSessionId(sid)}
+                className="font-mono text-xs bg-slate-50 dark:bg-slate-700/50 hover:bg-slate-100 dark:hover:bg-slate-700 rounded-lg px-3 py-1.5 text-blue-600 dark:text-blue-400 hover:text-blue-700 dark:hover:text-blue-300 truncate text-left transition-colors"
+                title="View session details"
               >
                 {sid}
-              </span>
+              </button>
             ))}
           </div>
         </div>
