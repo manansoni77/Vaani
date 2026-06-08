@@ -30,6 +30,8 @@ export interface Session {
   location?: string | null;
   since_when?: string | null;
   routed_department_id?: number | null;
+  caller_id?: number | null;
+  phone_number?: string | null;
   // Live-only fields
   caller_speaking?: boolean;
   ai_speaking?: boolean;

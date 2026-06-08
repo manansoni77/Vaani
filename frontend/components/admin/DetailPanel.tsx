@@ -117,6 +117,24 @@ export function DetailPanel({ session, live, agentId, panelWidth, onClose }: Pro
 
   // ---- Sections ----
 
+  const callerSection = session.phone_number ? (
+    <div className="flex flex-col gap-1.5">
+      <span className="text-xs font-semibold text-slate-400 uppercase tracking-wide">
+        Caller
+      </span>
+      <div className="flex items-center gap-2 bg-slate-50 dark:bg-slate-700/50 rounded-lg px-3 py-2">
+        <span className="font-mono text-sm text-slate-700 dark:text-slate-300">
+          {session.phone_number}
+        </span>
+        {session.caller_id != null && (
+          <span className="text-xs text-slate-400 dark:text-slate-500">
+            #{session.caller_id}
+          </span>
+        )}
+      </div>
+    </div>
+  ) : null;
+
   const sessionIdSection = (
     <div className="flex flex-col gap-1.5">
       <span className="text-xs font-semibold text-slate-400 uppercase tracking-wide">
@@ -500,6 +518,7 @@ export function DetailPanel({ session, live, agentId, panelWidth, onClose }: Pro
           <div className="flex flex-col gap-4">
             {takeoverSection}
             {routeSection}
+            {callerSection}
             {callerSignalsSection}
             {querySection}
             {timelineSection}
@@ -512,6 +531,7 @@ export function DetailPanel({ session, live, agentId, panelWidth, onClose }: Pro
         <div className="flex flex-col gap-5">
           {takeoverSection}
           {routeSection}
+          {callerSection}
           {sessionIdSection}
           {statusSection}
           {querySection}
