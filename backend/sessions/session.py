@@ -143,7 +143,7 @@ class CallSession:
     async def _queue_tts_sentences(self, text: str, lang: str) -> None:
         buf: list[str] = []
         agent_parts: list[str] = []
-        response = self.dialogue_flow.get_response(text)
+        response = self.dialogue_flow.get_response(text, history=self.conversation_turns[:-1])
 
         async for word in response:
             buf.append(word)

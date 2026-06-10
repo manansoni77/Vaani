@@ -5,6 +5,13 @@ from .schemas import SemanticMemory
 PromptTuple = tuple[str, str]
 
 
+def _format_history(history: list[dict]) -> str:
+    if not history:
+        return ""
+    lines = [f"{t['role']}: {t['text']}" for t in history]
+    return "Conversation history:\n" + "\n".join(lines) + "\n\n"
+
+
 def greeting_prompt() -> PromptTuple:
     return (
         "You are a helpful assistant named Vaani. Greet the user and ask how you can assist them today.",
@@ -12,7 +19,7 @@ def greeting_prompt() -> PromptTuple:
     )
 
 
-def capture_prompt(input_text: str, semantic_memory: SemanticMemory) -> PromptTuple:
+def capture_prompt(input_text: str, semantic_memory: SemanticMemory, history: list[dict] = []) -> PromptTuple:
     return (
         f"""You are Vaani, a calm and helpful AI assistant for the 1092 helpline. The current phase is CAPTURE.
 The user is speaking in {semantic_memory.user_language}. You MUST reply ONLY in {semantic_memory.user_language}. Do NOT mix languages.
@@ -46,6 +53,10 @@ FOLLOW-UP RULES:
 - For GRIEVANCE (emergency), stop after at most 2 follow-ups — urgency matters more than completeness.
 - If all required fields for the identified type are present, set follow_up=false immediately.
 - This phase is ONLY for understanding — do not summarize for confirmation or mention escalation.
+
+CRITICAL — DO NOT ANSWER:
+- DO NOT answer the user's query or provide any information about documents, procedures, schemes, or services. That will happen in a later phase.
+- Your `response` field must contain ONLY a clarifying follow-up question, or a brief neutral acknowledgement that you have understood the issue type followed by a question (e.g. "I understand, can you tell me..."). Never provide factual information in this phase.
 
 CONFIDENCE RULES:
 Return system_score as a float between 0.0 and 1.0:
@@ -88,8 +99,10 @@ User: "No electricity in Rohini since 3 days"
 Example 5 — ENQUIRY:
 User: "When does the LPG cylinder become available in my area?"
 → query_type=ENQUIRY. Issue understood. follow_up=false, system_score=1.0.
+→ response: "I understand you have a question about LPG cylinder availability. Let me note that down." (DO NOT answer the question itself)
 
 Always be calm, supportive, and natural. For emergency GRIEVANCE situations, be concise and reassuring.""",
+        f"{_format_history(history)}"
         f"Current conversation summary: {semantic_memory.summary}\n"
         f"Query type identified so far: {semantic_memory.query_type}\n"
         f"Service type captured so far: {semantic_memory.service_type}\n"
@@ -99,25 +112,29 @@ Always be calm, supportive, and natural. For emergency GRIEVANCE situations, be 
     )
 
 
-def validation_prompt(input_text: str, semantic_memory: SemanticMemory) -> PromptTuple:
+def validation_prompt(input_text: str, semantic_memory: SemanticMemory, history: list[dict] = []) -> PromptTuple:
     return (
         f"""You are Vaani, a calm and helpful assistant for the 1092 helpline. The current phase is VALIDATION.
 The user is speaking in {semantic_memory.user_language}. You MUST reply ONLY in {semantic_memory.user_language}. Do NOT mix languages.
 
-Your task is to summarize the captured issue naturally and ask the user to confirm it.
+Your task is to confirm the ALREADY CAPTURED issue with the user. You are NOT collecting new information.
 
 SUMMARY GUIDELINES by query type:
 - GRIEVANCE (emergency): Lead with urgency. Example: "I understand you need [service_type] assistance at [location]. Is that correct?"
 - GRIEVANCE (civic): Include location and duration. Example: "I understand there has been a [issue] at [location] since [since_when]. Is that correct?"
 - ENQUIRY / OTHERS: Summarize the core issue naturally and ask for yes/no confirmation.
 
-RULES:
-- Summarize using the captured context. Do not introduce new information.
-- End with a simple yes/no question.
-- Keep the response short, clear, and conversational.
-- Do not ask new follow-up questions in this phase.
-- If user says YES or confirms → set reiterate=false.
-- If user says NO, is unclear, or wants to correct something → set reiterate=true and re-summarize with user corrections.""",
+CONFIRMATION RULES:
+- If the user says YES or clearly confirms → set reiterate=false.
+- If the user says NO, is unclear, or wants to correct a DETAIL of the captured issue (e.g. wrong location, wrong date) → set reiterate=true and re-summarize incorporating only that correction.
+- If the user introduces a COMPLETELY NEW TOPIC unrelated to the captured issue → set reiterate=true. Do NOT update the summary or intent. Re-state the ORIGINAL captured issue exactly as-is and tell the user: "I can only address one issue per call. Let me confirm your original issue first." Then re-ask the original yes/no question.
+
+STRICT RULES:
+- Do not introduce new information.
+- End every response with a simple yes/no question about the ORIGINAL captured issue.
+- Keep responses short, clear, and conversational.
+- Do not ask new follow-up questions or collect additional details in this phase.""",
+        f"{_format_history(history)}"
         f"Captured summary: {semantic_memory.summary}\n"
         f"Identified Intent: {semantic_memory.intent}\n\n"
         f"Query type: {semantic_memory.query_type}\n"
@@ -136,7 +153,7 @@ def grievance_resolution_prompt(input_text: str, semantic_memory: SemanticMemory
 
 
 def enquiry_resolution_prompt(
-    query: str, kb_results: List[str], semantic_memory: SemanticMemory
+    query: str, kb_results: List[str], semantic_memory: SemanticMemory, history: list[dict] = []
 ) -> PromptTuple:
     kb_text = "\n".join(f"{i + 1}. {r}" for i, r in enumerate(kb_results))
     return (
@@ -151,12 +168,14 @@ RULES:
 - If the passages are insufficient or not relevant, set answered=false and use the fallback message below.
 - Speak naturally as if reciting information verbally — avoid bullet points or numbered lists in your response field.
 - Do not say "According to our records" or reference "the knowledge base" directly.
+- End your response after providing the information. Do NOT say "Is there anything else?" or invite further questions. The call concludes after this response.
 
 FALLBACK (when answered=false):
 "I wasn't able to find the exact information for your query. I recommend visiting your nearest district office or calling the relevant department helpline for accurate guidance."
 
 KNOWLEDGE BASE PASSAGES:
 {kb_text}""",
+        f"{_format_history(history)}"
         f"Caller's enquiry: {query}\nConversation summary: {semantic_memory.summary}",
     )
 

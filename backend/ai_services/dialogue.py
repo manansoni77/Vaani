@@ -59,9 +59,9 @@ class DialogueFlow:
         self.log.info("phase=GREETING generating greeting")
         self.phase = PHASE.CAPTURE
         # transition immediately so we don't have to route the first user message specially
-        yield "Hello! Thank you for calling Vaani. How can I assist you today?"
+        yield "message 1, Hello! Thank you for calling Vaani. How can I assist you today?"
 
-    async def get_response(self, input_text):
+    async def get_response(self, input_text, history: list[dict] = []):
         if self.phase == PHASE.COMPLETE:
             self.log.info("get_response called in COMPLETE phase — ignoring")
 
@@ -73,20 +73,21 @@ class DialogueFlow:
                         "en-IN": "Hope that information was helpful. Thank you for calling.",
                         "kn-IN": "ಆ ಮಾಹಿತಿ ಉಪಯುಕ್ತವಾಯಿತು ಎಂದು ಆಶಿಸುತ್ತೇನೆ. ಧನ್ಯವಾದ.",
                     }
+                    yield f"message 10, {response.get(self.semantic_memory.user_language, response['en-IN'])}"
                 else:
                     response = {
                         "hi-IN": "आपकी शिकायत दर्ज कर ली गई है। धन्यवाद।",
                         "en-IN": "Your issue has been recorded. Thank you for calling.",
                         "kn-IN": "ನಿಮ್ಮ ಸಮಸ್ಯೆ ದಾಖಲಾಗಿದೆ. ಧನ್ಯವಾದ.",
                     }
-                yield response.get(self.semantic_memory.user_language, response["en-IN"])
+                    yield f"message 11, {response.get(self.semantic_memory.user_language, response['en-IN'])}"
             elif _is_red(self.user_score):
                 response = {
                     "hi-IN": "मुझे खेद है, मैं आपकी समस्या को समझ नहीं पा रहा हूँ। कृपया मुझे एक पल दें, मैं आपको एक मानव एजेंट से जोड़ता हूँ।",
                     "en-IN": "Apologies, I'm having trouble understanding your issue. Please hold on, I'm connecting you to a human agent for better assistance.",
                     "kn-IN": "ಕ್ಷಮಿಸಿ, ನಿಮ್ಮ ಸಮಸ್ಯೆಯನ್ನು ನಾನು ಅರ್ಥಮಾಡಿಕೊಳ್ಳಲು ಕಷ್ಟಪಡುತ್ತಿದ್ದೇನೆ. ದಯವಿಟ್ಟು ಕಾಯಿರಿ, ನಾನು ನಿಮಗೆ ಉತ್ತಮ ಸಹಾಯಕ್ಕಾಗಿ ಮಾನವ ಏಜೆಂಟ್‌ಗೆ ಸಂಪರ್ಕಿಸುತ್ತಿದ್ದೇನೆ.",
                 }
-                yield response.get(self.semantic_memory.user_language, response["en-IN"])
+                yield f"message 12, {response.get(self.semantic_memory.user_language, response['en-IN'])}"
             return
 
         prompt_fn = PROMPTS[self.phase]
@@ -104,7 +105,7 @@ class DialogueFlow:
             self.log.info(
                 f"phase=CAPTURE turn={self.turns + 1} input={input_text!r} lang={self.semantic_memory.user_language!r}"
             )
-            prompt = prompt_fn(input_text, self.semantic_memory)
+            prompt = prompt_fn(input_text, self.semantic_memory, history)
             response = cast(
                 CaptureAndValidationResponse,
                 await llm_client.get_json_response(
@@ -141,7 +142,7 @@ class DialogueFlow:
 
             if self.turns >= self.max_turns or not response.follow_up:
                 if _not_red(response.system_score):
-                    yield response.response
+                    yield f"message 4, {response.response}"
                     self.phase = PHASE.VALIDATION
                     self.log.info("phase transitioning to VALIDATION based on follow_up=false")
                 elif _is_red(response.system_score):
@@ -150,15 +151,15 @@ class DialogueFlow:
                         "en-IN": "Apologies, I'm having trouble understanding your issue. Please hold on, I'm connecting you to a human agent for better assistance.",
                         "kn-IN": "ಕ್ಷಮಿಸಿ, ನಿಮ್ಮ ಸಮಸ್ಯೆಯನ್ನು ನಾನು ಅರ್ಥಮಾಡಿಕೊಳ್ಳಲು ಕಷ್ಟಪಡುತ್ತಿದ್ದೇನೆ. ದಯವಿಟ್ಟು ಕಾಯಿರಿ, ನಾನು ನಿಮಗೆ ಉತ್ತಮ ಸಹಾಯಕ್ಕಾಗಿ ಮಾನವ ಏಜೆಂಟ್‌ಗೆ ಸಂಪರ್ಕಿಸುತ್ತಿದ್ದೇನೆ.",
                     }
-                    yield escalate.get(locked_language, escalate["en-IN"])
+                    yield f"message 2, {escalate.get(locked_language, escalate['en-IN'])}"
             else:
-                yield response.response
+                yield f"message 3, {response.response}"
 
         elif self.phase == PHASE.VALIDATION:
             self.log.info(
                 f"phase=VALIDATION input={input_text!r} lang={self.semantic_memory.user_language!r}"
             )
-            prompt = prompt_fn(input_text, self.semantic_memory)
+            prompt = prompt_fn(input_text, self.semantic_memory, history)
             response = cast(
                 CaptureAndValidationResponse,
                 await llm_client.get_json_response(
@@ -178,13 +179,13 @@ class DialogueFlow:
             # Adding a follow up loop in Validation phase
             if self.first_validate:
                 self.first_validate = False
-                yield response.response
+                yield f"message 5, {response.response}"
             else:
                 if not response.reiterate:
                     if _not_red(response.user_score):
                         self.phase = PHASE.RESOLUTION
                         self.log.info("User confirmed — phase transitioning to RESOLUTION")
-                        async for chunk in self._handle_resolution():
+                        async for chunk in self._handle_resolution(history=history):
                             yield chunk
                     elif _is_red(response.user_score):
                         self.phase = PHASE.COMPLETE
@@ -193,13 +194,13 @@ class DialogueFlow:
                             "en-IN": "Apologies, I'm having trouble understanding your issue. Please hold on, I'm connecting you to a human agent for better assistance.",
                             "kn-IN": "ಕ್ಷಮಿಸಿ, ನಿಮ್ಮ ಸಮಸ್ಯೆಯನ್ನು ನಾನು ಅರ್ಥಮಾಡಿಕೊಳ್ಳಲು ಕಷ್ಟಪಡುತ್ತಿದ್ದೇನೆ. ದಯವಿಟ್ಟು ಕಾಯಿರಿ, ನಾನು ನಿಮಗೆ ಉತ್ತಮ ಸಹಾಯಕ್ಕಾಗಿ ಮಾನವ ಏಜೆಂಟ್‌ಗೆ ಸಂಪರ್ಕಿಸುತ್ತಿದ್ದೇನೆ.",
                         }
-                        yield escalate.get(self.semantic_memory.user_language, escalate["en-IN"])
+                        yield f"message 7, {escalate.get(self.semantic_memory.user_language, escalate['en-IN'])}"
                 else:
-                    # User denied or was unclear - stay in VALIDATION and ask again
-                    self.log.info("User denied or unclear - staying in VALIDATION for follow-up")
-                    yield response.response
+                    # User denied, corrected a detail, or introduced a new topic — stay in VALIDATION
+                    self.log.info("User denied/corrected/changed topic — staying in VALIDATION for follow-up")
+                    yield f"message 6, {response.response}"
 
-    async def _handle_resolution(self):
+    async def _handle_resolution(self, history: list[dict] = []):
         """
         Runs immediately after the user confirms in VALIDATION.
         Branches on query_type: ENQUIRY gets a KB-synthesized answer,
@@ -210,21 +211,23 @@ class DialogueFlow:
         self.log.info(f"phase=RESOLUTION query_type={qt}")
 
         if qt == QUERY_TYPE.ENQUIRY:
-            yield await self._resolve_enquiry()
+            yield await self._resolve_enquiry(history=history)
         else:
             yield self._resolve_grievance_ack()
 
         self.phase = PHASE.COMPLETE
         self.log.info("RESOLUTION complete — phase transitioning to COMPLETE")
 
-    async def _resolve_enquiry(self) -> str:
-        query = self.semantic_memory.intent or self.semantic_memory.summary
+    async def _resolve_enquiry(self, history: list[dict] = []) -> str:
+        mem = self.semantic_memory
+        parts = [p for p in [mem.intent, mem.summary, mem.key_details] if p]
+        query = " | ".join(parts) if parts else "general enquiry"
         self.log.info(f"RESOLUTION/ENQUIRY fetching KB for query={query!r}")
 
         kb_results = await fetch_kb_results(query)
         self.log.info(f"KB returned {len(kb_results)} result(s)")
 
-        prompt = enquiry_resolution_prompt(query, kb_results, self.semantic_memory)
+        prompt = enquiry_resolution_prompt(query, kb_results, self.semantic_memory, history)
         resolution = cast(
             EnquiryResolutionResponse,
             await llm_client.get_json_response(
@@ -236,7 +239,7 @@ class DialogueFlow:
         )
 
         self.log.info(f"RESOLUTION/ENQUIRY answered={resolution.answered}")
-        return resolution.response
+        return f"message 8, {resolution.response}"
 
     def _resolve_grievance_ack(self) -> str:
         ack = {
@@ -244,4 +247,4 @@ class DialogueFlow:
             "en-IN": "Your grievance has been recorded. Our team will look into it shortly.",
             "kn-IN": "ನಿಮ್ಮ ದೂರನ್ನು ದಾಖಲಿಸಲಾಗಿದೆ. ನಮ್ಮ ತಂಡ ಶೀಘ್ರದಲ್ಲೇ ಇದನ್ನು ಪರಿಶೀಲಿಸುತ್ತದೆ.",
         }
-        return ack.get(self.semantic_memory.user_language, ack["en-IN"])
+        return f"message 9, {ack.get(self.semantic_memory.user_language, ack['en-IN'])}"
