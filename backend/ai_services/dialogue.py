@@ -142,9 +142,12 @@ class DialogueFlow:
 
             if self.turns >= self.max_turns or not response.follow_up:
                 if _not_red(response.system_score):
-                    yield f"message 4, {response.response}"
+                    # Skip the CAPTURE statement — run VALIDATION inline so the user
+                    # gets a confirmation question immediately with no silent gap.
                     self.phase = PHASE.VALIDATION
-                    self.log.info("phase transitioning to VALIDATION based on follow_up=false")
+                    self.log.info("follow_up=false — transitioning to VALIDATION and asking confirmation inline")
+                    async for chunk in self._start_validation(input_text, history):
+                        yield chunk
                 elif _is_red(response.system_score):
                     escalate = {
                         "hi-IN": "मुझे खेद है, मैं आपकी समस्या को समझ नहीं पा रहा हूँ। कृपया मुझे एक पल दें, मैं आपको एक मानव एजेंट से जोड़ता हूँ।",
@@ -200,6 +203,34 @@ class DialogueFlow:
                     self.log.info("User denied/corrected/changed topic — staying in VALIDATION for follow-up")
                     yield f"message 6, {response.response}"
 
+    async def _start_validation(self, input_text: str, history: list[dict] = []):
+        """
+        Called inline when CAPTURE finishes (follow_up=false, system_score not red).
+        Runs the VALIDATION LLM immediately to ask the confirmation question in the
+        same turn — the user gets one coherent response instead of a dead statement
+        followed by silence waiting for a prompt.
+        Sets first_validate=False so the next user reply goes straight to the
+        reiterate/confirm check.
+        """
+        prompt_fn = PROMPTS[PHASE.VALIDATION]
+        prompt = prompt_fn(input_text, self.semantic_memory, history)
+        response = cast(
+            CaptureAndValidationResponse,
+            await llm_client.get_json_response(
+                system_prompt=prompt[0],
+                user_prompt=prompt[1],
+                response_format=CaptureAndValidationResponse,
+                log=self.llm_log,
+            ),
+        )
+        self.system_score = response.system_score
+        self.user_score = response.user_score
+        self.first_validate = False
+        self.log.info(
+            f"inline VALIDATION ask — system={self.system_score:.2f} user={self.user_score:.2f}"
+        )
+        yield f"message 5, {response.response}"
+
     async def _handle_resolution(self, history: list[dict] = []):
         """
         Runs immediately after the user confirms in VALIDATION.
@@ -212,8 +243,20 @@ class DialogueFlow:
 
         if qt == QUERY_TYPE.ENQUIRY:
             yield await self._resolve_enquiry(history=history)
+            outro = {
+                "hi-IN": "मुझे उम्मीद है यह जानकारी आपके काम आई। वाणी से संपर्क करने के लिए धन्यवाद।",
+                "en-IN": "I hope this information was helpful. Thank you for reaching out to Vaani.",
+                "kn-IN": "ಈ ಮಾಹಿತಿ ಉಪಯುಕ್ತವಾಯಿತು ಎಂದು ಆಶಿಸುತ್ತೇನೆ. ವಾಣಿಯನ್ನು ಸಂಪರ್ಕಿಸಿದ್ದಕ್ಕೆ ಧನ್ಯವಾದ.",
+            }
+            yield f"message 13, {outro.get(self.semantic_memory.user_language, outro['en-IN'])}"
         else:
             yield self._resolve_grievance_ack()
+            outro = {
+                "hi-IN": "वाणी से संपर्क करने के लिए धन्यवाद। हम जल्द ही आपसे संपर्क करेंगे।",
+                "en-IN": "Thank you for reaching out to Vaani. We will get back to you shortly.",
+                "kn-IN": "ವಾಣಿಯನ್ನು ಸಂಪರ್ಕಿಸಿದ್ದಕ್ಕೆ ಧನ್ಯವಾದ. ನಾವು ಶೀಘ್ರದಲ್ಲೇ ನಿಮ್ಮನ್ನು ಸಂಪರ್ಕಿಸುತ್ತೇವೆ.",
+            }
+            yield f"message 14, {outro.get(self.semantic_memory.user_language, outro['en-IN'])}"
 
         self.phase = PHASE.COMPLETE
         self.log.info("RESOLUTION complete — phase transitioning to COMPLETE")
