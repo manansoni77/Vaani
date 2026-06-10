@@ -1,8 +1,9 @@
 from typing import cast
 from .llm import LLMClient
-from constants import PHASE
-from .schemas import CaptureAndValidationResponse, SemanticMemory
-from .prompts import PROMPTS
+from constants import PHASE, QUERY_TYPE
+from .schemas import CaptureAndValidationResponse, EnquiryResolutionResponse, SemanticMemory
+from .prompts import PROMPTS, enquiry_resolution_prompt
+from .knowledge_base import fetch_kb_results
 from loggers import get_logger, LOG_ENTITIES
 
 llm_client = LLMClient()
@@ -65,11 +66,19 @@ class DialogueFlow:
             self.log.info("get_response called in COMPLETE phase — ignoring")
 
             if _not_red(self.user_score):
-                response = {
-                    "hi-IN": "धन्यवाद पुष्टि करने के लिए। आपकी क्वेरी नोट कर ली गई है, हम इसे देखेंगे।",
-                    "en-IN": "Thank you for confirming. Your query has been noted, we will look into it.",
-                    "kn-IN": "ದೃಢೀಕರಿಸಿದಕ್ಕಾಗಿ ಧನ್ಯವಾದಗಳು. ನಿಮ್ಮ ಪ್ರಶ್ನೆಯನ್ನು ಗಮನಿಸಲಾಗಿದೆ, ನಾವು ಅದನ್ನು ನೋಡುತ್ತೇವೆ.",
-                }
+                qt = self.semantic_memory.query_type
+                if qt == QUERY_TYPE.ENQUIRY:
+                    response = {
+                        "hi-IN": "उम्मीद है यह जानकारी आपके काम आई। धन्यवाद।",
+                        "en-IN": "Hope that information was helpful. Thank you for calling.",
+                        "kn-IN": "ಆ ಮಾಹಿತಿ ಉಪಯುಕ್ತವಾಯಿತು ಎಂದು ಆಶಿಸುತ್ತೇನೆ. ಧನ್ಯವಾದ.",
+                    }
+                else:
+                    response = {
+                        "hi-IN": "आपकी शिकायत दर्ज कर ली गई है। धन्यवाद।",
+                        "en-IN": "Your issue has been recorded. Thank you for calling.",
+                        "kn-IN": "ನಿಮ್ಮ ಸಮಸ್ಯೆ ದಾಖಲಾಗಿದೆ. ಧನ್ಯವಾದ.",
+                    }
                 yield response.get(self.semantic_memory.user_language, response["en-IN"])
             elif _is_red(self.user_score):
                 response = {
@@ -78,6 +87,7 @@ class DialogueFlow:
                     "kn-IN": "ಕ್ಷಮಿಸಿ, ನಿಮ್ಮ ಸಮಸ್ಯೆಯನ್ನು ನಾನು ಅರ್ಥಮಾಡಿಕೊಳ್ಳಲು ಕಷ್ಟಪಡುತ್ತಿದ್ದೇನೆ. ದಯವಿಟ್ಟು ಕಾಯಿರಿ, ನಾನು ನಿಮಗೆ ಉತ್ತಮ ಸಹಾಯಕ್ಕಾಗಿ ಮಾನವ ಏಜೆಂಟ್‌ಗೆ ಸಂಪರ್ಕಿಸುತ್ತಿದ್ದೇನೆ.",
                 }
                 yield response.get(self.semantic_memory.user_language, response["en-IN"])
+            return
 
         prompt_fn = PROMPTS[self.phase]
 
@@ -171,17 +181,13 @@ class DialogueFlow:
                 yield response.response
             else:
                 if not response.reiterate:
-                    self.phase = PHASE.COMPLETE
-                    self.log.info("User confirmed - phase transitioning to COMPLETE")
-
                     if _not_red(response.user_score):
-                        confirmed = {
-                            "hi-IN": "धन्यवाद पुष्टि करने के लिए। आपकी क्वेरी नोट कर ली गई है, हम इसे देखेंगे।",
-                            "en-IN": "Thank you for confirming. Your query has been noted, we will look into it.",
-                            "kn-IN": "ದೃಢೀಕರಿಸಿದಕ್ಕಾಗಿ ಧನ್ಯವಾದಗಳು. ನಿಮ್ಮ ಪ್ರಶ್ನೆಯನ್ನು ಗಮನಿಸಲಾಗಿದೆ, ನಾವು ಅದನ್ನು ನೋಡುತ್ತೇವೆ.",
-                        }
-                        yield confirmed.get(self.semantic_memory.user_language, confirmed["en-IN"])
+                        self.phase = PHASE.RESOLUTION
+                        self.log.info("User confirmed — phase transitioning to RESOLUTION")
+                        async for chunk in self._handle_resolution():
+                            yield chunk
                     elif _is_red(response.user_score):
+                        self.phase = PHASE.COMPLETE
                         escalate = {
                             "hi-IN": "मुझे खेद है, मैं आपकी समस्या को समझ नहीं पा रहा हूँ। कृपया मुझे एक पल दें, मैं आपको एक मानव एजेंट से जोड़ता हूँ।",
                             "en-IN": "Apologies, I'm having trouble understanding your issue. Please hold on, I'm connecting you to a human agent for better assistance.",
@@ -192,3 +198,50 @@ class DialogueFlow:
                     # User denied or was unclear - stay in VALIDATION and ask again
                     self.log.info("User denied or unclear - staying in VALIDATION for follow-up")
                     yield response.response
+
+    async def _handle_resolution(self):
+        """
+        Runs immediately after the user confirms in VALIDATION.
+        Branches on query_type: ENQUIRY gets a KB-synthesized answer,
+        GRIEVANCE/OTHERS get a verbal acknowledgement.
+        Transitions to COMPLETE when done.
+        """
+        qt = self.semantic_memory.query_type
+        self.log.info(f"phase=RESOLUTION query_type={qt}")
+
+        if qt == QUERY_TYPE.ENQUIRY:
+            yield await self._resolve_enquiry()
+        else:
+            yield self._resolve_grievance_ack()
+
+        self.phase = PHASE.COMPLETE
+        self.log.info("RESOLUTION complete — phase transitioning to COMPLETE")
+
+    async def _resolve_enquiry(self) -> str:
+        query = self.semantic_memory.intent or self.semantic_memory.summary
+        self.log.info(f"RESOLUTION/ENQUIRY fetching KB for query={query!r}")
+
+        kb_results = await fetch_kb_results(query)
+        self.log.info(f"KB returned {len(kb_results)} result(s)")
+
+        prompt = enquiry_resolution_prompt(query, kb_results, self.semantic_memory)
+        resolution = cast(
+            EnquiryResolutionResponse,
+            await llm_client.get_json_response(
+                system_prompt=prompt[0],
+                user_prompt=prompt[1],
+                response_format=EnquiryResolutionResponse,
+                log=self.llm_log,
+            ),
+        )
+
+        self.log.info(f"RESOLUTION/ENQUIRY answered={resolution.answered}")
+        return resolution.response
+
+    def _resolve_grievance_ack(self) -> str:
+        ack = {
+            "hi-IN": "आपकी शिकायत दर्ज कर ली गई है। हमारी टीम जल्द ही इस पर कार्रवाई करेगी।",
+            "en-IN": "Your grievance has been recorded. Our team will look into it shortly.",
+            "kn-IN": "ನಿಮ್ಮ ದೂರನ್ನು ದಾಖಲಿಸಲಾಗಿದೆ. ನಮ್ಮ ತಂಡ ಶೀಘ್ರದಲ್ಲೇ ಇದನ್ನು ಪರಿಶೀಲಿಸುತ್ತದೆ.",
+        }
+        return ack.get(self.semantic_memory.user_language, ack["en-IN"])

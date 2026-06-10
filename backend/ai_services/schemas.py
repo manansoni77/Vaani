@@ -34,3 +34,8 @@ class CaptureAndValidationResponse(SemanticMemory):
 
 class DecisionResponse(BaseModel):
     user_score: float = Field(..., ge=0.0, le=1.0, description="User confirmation confidence: 0–0.33 red (denied/unclear), 0.33–0.66 yellow, 0.66–1.0 green (confirmed).")
+
+
+class EnquiryResolutionResponse(BaseModel):
+    response: str = Field(..., description="Synthesized spoken answer to the caller's enquiry, grounded in KB results. 2–4 sentences, natural spoken language.")
+    answered: bool = Field(..., description="True if KB results contained enough information for a clear answer. False if results were insufficient — use the fallback message.")
