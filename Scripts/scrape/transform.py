@@ -12,22 +12,22 @@ _FIELD_MAP = {
     "sk_serviceName_eng": "service_eng",
     "sk_serviceName_kan": "service_kan",
     "sk_schemeName_eng": "scheme_eng",
-    "sk_schemeName_kan": "scheme_kan",     
+    "sk_schemeName_kan": "scheme_kan",
     "kd_Procedure_eng": "procedure_eng",
-    "kd_Eligibility_eng": "eligibility_eng",
-    "kd_Document_eng": "documents_eng",
-    "kd_officer_eng": "officer_eng",
-    "kd_Prescribed_eng": "prescribed_eng",
     "kd_Procedure_kan": "procedure_kan",
+    "kd_Eligibility_eng": "eligibility_eng",
     "kd_Eligibility_kan": "eligibility_kan",
+    "kd_Document_eng": "documents_eng",
     "kd_Document_kan": "documents_kan",
+    "kd_officer_eng": "officer_eng",
     "kd_officer_kan": "officer_kan",
+    "kd_Prescribed_eng": "prescribed_eng",
     "kd_Prescribed_kan": "prescribed_kan",
     "dk_is_active": "dept_active",
     "sk_is_active": "service_active",
 }
-
 _INT_FIELDS = {"dept_id", "service_id", "scheme_id"}
+
 
 def to_canonical(raw: dict) -> dict:
     cleaned = clean_record(raw)
@@ -42,20 +42,12 @@ def to_canonical(raw: dict) -> dict:
         else:
             doc[dst] = val if val else ""
 
+    # Stable document ID
     doc["id"] = (
         f"{doc.get('dept_id')}_"
         f"{doc.get('service_id')}_"
         f"{doc.get('scheme_id')}"
     )
-
-    doc["metadata"] = {
-        "dept_id": doc.get("dept_id"),
-        "service_id": doc.get("service_id"),
-        "scheme_id": doc.get("scheme_id"),
-        "department": doc.get("department_eng"),
-        "service": doc.get("service_eng"),
-        "scheme": doc.get("scheme_eng"),
-    }
 
     return doc
 
@@ -91,8 +83,40 @@ def to_nl_text(doc: dict) -> str:
 
     return "\n".join(parts)
 
+
+def add_metadata(doc: dict) -> None:
+    doc["metadata"] = {
+        # IDs
+        "dept_id": doc.get("dept_id"),
+        "service_id": doc.get("service_id"),
+        "scheme_id": doc.get("scheme_id"),
+        # English
+        "department_eng": doc.get("department_eng"),
+        "service_eng": doc.get("service_eng"),
+        "scheme_eng": doc.get("scheme_eng"),
+        "procedure_eng": doc.get("procedure_eng"),
+        "eligibility_eng": doc.get("eligibility_eng"),
+        "documents_eng": doc.get("documents_eng"),
+        "officer_eng": doc.get("officer_eng"),
+        "prescribed_eng": doc.get("prescribed_eng"),
+        # Kannada
+        "department_kan": doc.get("department_kan"),
+        "service_kan": doc.get("service_kan"),
+        "scheme_kan": doc.get("scheme_kan"),
+        "procedure_kan": doc.get("procedure_kan"),
+        "eligibility_kan": doc.get("eligibility_kan"),
+        "documents_kan": doc.get("documents_kan"),
+        "officer_kan": doc.get("officer_kan"),
+        "prescribed_kan": doc.get("prescribed_kan"),
+
+        # Full context
+        "text": doc.get("text", ""),
+    }
+
+
 def save_knowledge_docs(records: list[dict], output_path: Path) -> None:
     output_path.parent.mkdir(parents=True, exist_ok=True)
+
     with open(output_path, "w", encoding="utf-8") as f:
         for record in records:
             f.write(json.dumps(record, ensure_ascii=False) + "\n")

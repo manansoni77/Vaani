@@ -4,7 +4,8 @@ from pathlib import Path
 
 import requests
 import urllib3
-from transform import save_knowledge_docs, to_canonical, to_nl_text
+from department import DEPARTMENT_IDS
+from transform import add_metadata, save_knowledge_docs, to_canonical, to_nl_text
 
 urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
 
@@ -152,7 +153,7 @@ def main() -> None:
         "dept_ids",
         nargs="*",
         type=int,
-        default=[3],
+        default=DEPARTMENT_IDS,
         help="Department IDs to scrape",
     )
     parser.add_argument(
@@ -170,6 +171,7 @@ def main() -> None:
     for record in raw_records:
         canonical = to_canonical(record)
         canonical["text"] = to_nl_text(canonical)
+        add_metadata(canonical)
         docs.append(canonical)
 
     output_path = output_dir / "knowledge_docs.jsonl"
