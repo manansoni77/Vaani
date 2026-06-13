@@ -1,9 +1,10 @@
 from typing import cast
 from .llm import LLMClient
 from constants import PHASE, QUERY_TYPE
-from .schemas import CaptureAndValidationResponse, EnquiryResolutionResponse, SemanticMemory
-from .prompts import PROMPTS, enquiry_resolution_prompt
+from .schemas import CaptureAndValidationResponse, EnquiryResolutionResponse, RedirectResponse, SemanticMemory
+from .prompts import PROMPTS, enquiry_resolution_prompt, redirect_clarification_prompt
 from .knowledge_base import fetch_kb_results
+from .departments import match_department, match_redirect_department, format_department_contact
 from loggers import get_logger, LOG_ENTITIES
 
 llm_client = LLMClient()
@@ -30,6 +31,7 @@ class DialogueFlow:
         self.first_validate = True  # Flag to track if we're on the first validation turn
         self.system_score: float | None = None
         self.user_score: float | None = None
+        self._redirect_dept_name: str | None = None
         self.log = get_logger(LOG_ENTITIES.DIALOGUE_FLOW, session_id=session_id)
         self.llm_log = get_logger(LOG_ENTITIES.OPENAI_LLM, session_id=session_id)
 
@@ -40,6 +42,7 @@ class DialogueFlow:
             "semantic_memory": SemanticMemory(**self.semantic_memory.model_dump()),
             "system_score": self.system_score,
             "user_score": self.user_score,
+            "_redirect_dept_name": self._redirect_dept_name,
         }
 
     def restore_state(self, state: dict) -> None:
@@ -48,6 +51,7 @@ class DialogueFlow:
         self.semantic_memory = state["semantic_memory"]
         self.system_score = state["system_score"]
         self.user_score = state["user_score"]
+        self._redirect_dept_name = state.get("_redirect_dept_name")
 
     async def stream_greeting(self):
         """
@@ -88,6 +92,38 @@ class DialogueFlow:
                     "kn-IN": "ಕ್ಷಮಿಸಿ, ನಿಮ್ಮ ಸಮಸ್ಯೆಯನ್ನು ನಾನು ಅರ್ಥಮಾಡಿಕೊಳ್ಳಲು ಕಷ್ಟಪಡುತ್ತಿದ್ದೇನೆ. ದಯವಿಟ್ಟು ಕಾಯಿರಿ, ನಾನು ನಿಮಗೆ ಉತ್ತಮ ಸಹಾಯಕ್ಕಾಗಿ ಮಾನವ ಏಜೆಂಟ್‌ಗೆ ಸಂಪರ್ಕಿಸುತ್ತಿದ್ದೇನೆ.",
                 }
                 yield f"message 12, {response.get(self.semantic_memory.user_language, response['en-IN'])}"
+            return
+
+        if self.phase == PHASE.REDIRECT:
+            self.log.info(
+                f"phase=REDIRECT dept={self._redirect_dept_name!r} input={input_text!r}"
+            )
+            prompt = redirect_clarification_prompt(
+                input_text, self._redirect_dept_name or "", self.semantic_memory
+            )
+            response = cast(
+                RedirectResponse,
+                await llm_client.get_json_response(
+                    system_prompt=prompt[0],
+                    user_prompt=prompt[1],
+                    response_format=RedirectResponse,
+                    log=self.llm_log,
+                ),
+            )
+            if response.user_done:
+                self.phase = PHASE.COMPLETE
+                self.log.info("REDIRECT: user is done — transitioning to COMPLETE")
+                yield f"message 17, {response.response}"
+            else:
+                # User clarified their query is different — reset to CAPTURE
+                locked_language = self.semantic_memory.user_language
+                self.semantic_memory = SemanticMemory(user_language=locked_language)
+                self.turns = 0
+                self.first_validate = True
+                self._redirect_dept_name = None
+                self.phase = PHASE.CAPTURE
+                self.log.info("REDIRECT: user has a different query — resetting to CAPTURE")
+                yield f"message 18, {response.response}"
             return
 
         prompt_fn = PROMPTS[self.phase]
@@ -139,6 +175,19 @@ class DialogueFlow:
                 f"semantic_memory rebuilt — lang={locked_language!r} turns={self.turns} "
                 f"system_score={self.system_score:.2f} urgency_score={self.semantic_memory.urgency_score:.2f}"
             )
+
+            # Check for redirect departments before any follow-up / validation logic
+            mem = self.semantic_memory
+            parts = [p for p in [mem.intent, mem.summary, mem.key_details] if p]
+            combined_query = " | ".join(parts)
+            redirect_dept = match_redirect_department(combined_query) if combined_query else None
+            if redirect_dept:
+                self._redirect_dept_name = redirect_dept.name
+                self.phase = PHASE.REDIRECT
+                contact_info = format_department_contact(redirect_dept, locked_language)
+                self.log.info(f"CAPTURE matched redirect dept={redirect_dept.name!r} — transitioning to REDIRECT")
+                yield f"message 16, It looks like your query is related to {redirect_dept.name}, which is handled by a separate department. {contact_info} I'll stay on the line — please let me know if you have a different query or if this helps."
+                return
 
             if self.turns >= self.max_turns or not response.follow_up:
                 if _not_red(response.system_score):
@@ -241,22 +290,32 @@ class DialogueFlow:
         qt = self.semantic_memory.query_type
         self.log.info(f"phase=RESOLUTION query_type={qt}")
 
+        lang = self.semantic_memory.user_language
+        mem = self.semantic_memory
+        parts = [p for p in [mem.intent, mem.summary, mem.key_details] if p]
+        dept_query = " | ".join(parts) if parts else ""
+        matched_dept = match_department(dept_query) if dept_query else None
+
         if qt == QUERY_TYPE.ENQUIRY:
             yield await self._resolve_enquiry(history=history)
+            if matched_dept:
+                yield f"message 15, {format_department_contact(matched_dept, lang)}"
             outro = {
                 "hi-IN": "मुझे उम्मीद है यह जानकारी आपके काम आई। वाणी से संपर्क करने के लिए धन्यवाद।",
                 "en-IN": "I hope this information was helpful. Thank you for reaching out to Vaani.",
                 "kn-IN": "ಈ ಮಾಹಿತಿ ಉಪಯುಕ್ತವಾಯಿತು ಎಂದು ಆಶಿಸುತ್ತೇನೆ. ವಾಣಿಯನ್ನು ಸಂಪರ್ಕಿಸಿದ್ದಕ್ಕೆ ಧನ್ಯವಾದ.",
             }
-            yield f"message 13, {outro.get(self.semantic_memory.user_language, outro['en-IN'])}"
+            yield f"message 13, {outro.get(lang, outro['en-IN'])}"
         else:
             yield self._resolve_grievance_ack()
+            if matched_dept:
+                yield f"message 15, {format_department_contact(matched_dept, lang)}"
             outro = {
                 "hi-IN": "वाणी से संपर्क करने के लिए धन्यवाद। हम जल्द ही आपसे संपर्क करेंगे।",
                 "en-IN": "Thank you for reaching out to Vaani. We will get back to you shortly.",
                 "kn-IN": "ವಾಣಿಯನ್ನು ಸಂಪರ್ಕಿಸಿದ್ದಕ್ಕೆ ಧನ್ಯವಾದ. ನಾವು ಶೀಘ್ರದಲ್ಲೇ ನಿಮ್ಮನ್ನು ಸಂಪರ್ಕಿಸುತ್ತೇವೆ.",
             }
-            yield f"message 14, {outro.get(self.semantic_memory.user_language, outro['en-IN'])}"
+            yield f"message 14, {outro.get(lang, outro['en-IN'])}"
 
         self.phase = PHASE.COMPLETE
         self.log.info("RESOLUTION complete — phase transitioning to COMPLETE")

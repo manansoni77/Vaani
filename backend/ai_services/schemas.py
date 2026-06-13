@@ -36,6 +36,11 @@ class DecisionResponse(BaseModel):
     user_score: float = Field(..., ge=0.0, le=1.0, description="User confirmation confidence: 0–0.33 red (denied/unclear), 0.33–0.66 yellow, 0.66–1.0 green (confirmed).")
 
 
+class RedirectResponse(BaseModel):
+    user_done: bool = Field(..., description="True if the user is saying goodbye/thank you and is satisfied with the redirect. False if they are clarifying that their query is actually different and want to continue.")
+    response: str = Field(..., description="The agent's response: a warm farewell if user_done=true, or a brief acknowledgement and invitation to describe their actual query if user_done=false.")
+
+
 class EnquiryResolutionResponse(BaseModel):
     response: str = Field(..., description="Synthesized spoken answer to the caller's enquiry, grounded in KB results. 2–4 sentences, natural spoken language.")
     answered: bool = Field(..., description="True if KB results contained enough information for a clear answer. False if results were insufficient — use the fallback message.")
