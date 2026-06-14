@@ -271,6 +271,10 @@ export function useAudioStream(options: UseAudioStreamOptions): UseAudioStreamRe
       incomingSilenceTimerRef.current = setTimeout(() => {
         incomingSilenceTimerRef.current = null;
         prevIncomingVoiceRef.current = false;
+        // If audio is still buffered and scheduled to play, don't clear the
+        // speaker yet — the last AudioBufferSourceNode's onended will do it.
+        const ctx = audioCtxRef.current;
+        if (ctx && nextPlayTimeRef.current > ctx.currentTime + 0.05) return;
         if (!prevSpeakingRef.current) {
           setSpeaker("silent");
         }

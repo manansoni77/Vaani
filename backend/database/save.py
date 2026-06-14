@@ -61,6 +61,8 @@ def save_call_session(
                 assigned_to=ticket_assigned,
                 status=ticket_status,
                 priority="normal",
+                description=f"Intent: {intent}\nSummary: {summary}",
+                extracted_entities={"key_details": key_details} if key_details else None,
                 created_at=started_at,
                 updated_at=ended_at,
             )

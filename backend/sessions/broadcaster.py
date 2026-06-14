@@ -70,6 +70,8 @@ def build_status(
     location: str | None = None,
     since_when: str | None = None,
     routed_department_id: int | None = None,
+    caller_id: int | None = None,
+    phone_number: str | None = None,
 ) -> dict:
     return {
         "event_type": event_type,
@@ -96,5 +98,7 @@ def build_status(
         "location": location,
         "since_when": since_when,
         "routed_department_id": routed_department_id,
+        "caller_id": caller_id,
+        "phone_number": phone_number,
         "timestamp": datetime.now(timezone.utc).isoformat(timespec="milliseconds"),
     }
