@@ -1,6 +1,6 @@
 from typing import cast
 from .llm import LLMClient
-from constants import PHASE, QUERY_TYPE
+from constants import PHASE, QUERY_TYPE, SERVICE_TYPE   
 from .schemas import CaptureAndValidationResponse, SemanticMemory
 from .prompts import PROMPTS
 from .knowledge_base import fetch_kb_results
@@ -95,7 +95,8 @@ class DialogueFlow:
             self.log.info(
                 f"phase=CAPTURE turn={self.turns + 1} input={input_text!r} lang={self.semantic_memory.user_language!r}"
             )
-            prompt = prompt_fn(input_text, self.semantic_memory)
+            kb_results = await fetch_kb_results(input_text)
+            prompt = prompt_fn(input_text, self.semantic_memory, kb_results=kb_results)
             response = cast(
                 CaptureAndValidationResponse,
                 await llm_client.get_json_response(
@@ -149,7 +150,8 @@ class DialogueFlow:
             self.log.info(
                 f"phase=VALIDATION input={input_text!r} lang={self.semantic_memory.user_language!r}"
             )
-            prompt = prompt_fn(input_text, self.semantic_memory)
+            kb_results = await fetch_kb_results(self.semantic_memory.summary or input_text)
+            prompt = prompt_fn(input_text, self.semantic_memory, kb_results=kb_results)
             response = cast(
                 CaptureAndValidationResponse,
                 await llm_client.get_json_response(

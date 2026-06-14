@@ -11,5 +11,5 @@
 *.sqlite3
 
 # Virtual envs
-.venv/
+.venv
 *.venv/
