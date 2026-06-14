@@ -1,8 +1,9 @@
 from typing import cast
 from .llm import LLMClient
-from constants import PHASE
+from constants import PHASE, QUERY_TYPE
 from .schemas import CaptureAndValidationResponse, SemanticMemory
 from .prompts import PROMPTS
+from .knowledge_base import fetch_kb_results
 from loggers import get_logger, LOG_ENTITIES
 
 llm_client = LLMClient()

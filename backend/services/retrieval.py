@@ -84,7 +84,6 @@ def retrieve(query: str, top_k: int | None = None) -> List[dict]:
     results = []
 
     for match in response.matches:
-
         if match.score < SCORE_THRESHOLD:
             continue
 
@@ -127,24 +126,19 @@ def format_context(docs: List[dict]) -> str:
     ]
 
     for idx, doc in enumerate(docs, start=1):
-
         header = (
             f"{idx}. "
             f"{doc.get('scheme_eng', '')}"
             f" ({doc.get('service_eng', '')})"
             f" - {doc.get('department_eng', '')}"
         )
-
         lines.append(header)
 
         for label, key in fields:
-
             value = doc.get(key)
-
             if value:
                 lines.append(f"{label}: {value}")
 
         lines.append("")
 
     return "\n".join(lines).strip()
-
