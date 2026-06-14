@@ -74,6 +74,16 @@ export function SessionCard({ session, live, selected, onClick }: Props) {
         </p>
       )}
 
+      {/* Caller info */}
+      {(session.phone_number || session.caller_id != null) && (
+        <div className="flex items-center gap-1.5 text-xs text-slate-500 dark:text-slate-400 font-mono">
+          {session.phone_number && <span>{session.phone_number}</span>}
+          {session.caller_id != null && (
+            <span className="text-slate-400 dark:text-slate-500">#{session.caller_id}</span>
+          )}
+        </div>
+      )}
+
       {/* Footer: duration + turns */}
       <div className="flex items-center gap-2 text-xs text-slate-400 dark:text-slate-500 font-mono mt-auto">
         <span>{formatDuration(session.duration_s)}</span>

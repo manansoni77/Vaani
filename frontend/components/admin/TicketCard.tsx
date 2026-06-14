@@ -59,7 +59,12 @@ export function TicketCard({ ticket, selected, onClick, onClaim }: Props) {
         )}
       </div>
 
-      {/* Row 3: Description */}
+      {/* Row 3: Caller */}
+      <div className="text-xs text-slate-400 dark:text-slate-500 font-mono">
+        Caller #{ticket.caller_id}
+      </div>
+
+      {/* Row 4: Description */}
       {ticket.description ? (
         <p className="text-xs text-slate-600 dark:text-slate-300 truncate leading-relaxed">
           {ticket.description}

@@ -55,7 +55,6 @@ class StaffUser(Base):
     taken_sessions = relationship(
         "CallSessionRecord", back_populates="taken_over_by_user"
     )
-    log_entries = relationship("LogEntry", back_populates="actor")
 
 
 class Caller(Base):
@@ -97,7 +96,6 @@ class Ticket(Base):
         "StaffUser", foreign_keys=[approved_by], back_populates="approved_tickets"
     )
     sessions = relationship("CallSessionRecord", back_populates="ticket")
-    logs = relationship("LogEntry", back_populates="ticket")
 
 
 class LogEntry(Base):
@@ -105,16 +103,12 @@ class LogEntry(Base):
 
     id = Column(Integer, primary_key=True, autoincrement=True)
     entity_type = Column(String, nullable=False)  # was entity
-    ticket_id = Column(Integer, ForeignKey("tickets.id"), nullable=True)
-    session_id = Column(String, ForeignKey("call_sessions.session_id"), nullable=True)
-    actor_id = Column(Integer, ForeignKey("staff_users.id"), nullable=True)
-    level = Column(String, nullable=True)  # kept from existing
-    message = Column(String, nullable=True)  # kept from existing
-    timestamp = Column(String, nullable=True)  # kept from existing
-
-    ticket = relationship("Ticket", back_populates="logs")
-    session = relationship("CallSessionRecord", back_populates="logs")
-    actor = relationship("StaffUser", back_populates="log_entries")
+    ticket_id = Column(Integer, nullable=True)
+    session_id = Column(String, nullable=True)
+    actor_id = Column(Integer, nullable=True)
+    level = Column(String, nullable=True)
+    message = Column(String, nullable=True)
+    timestamp = Column(String, nullable=True)
 
 
 class CallSessionRecord(Base):
@@ -150,4 +144,3 @@ class CallSessionRecord(Base):
     ticket = relationship("Ticket", back_populates="sessions")
     caller = relationship("Caller", back_populates="sessions")
     taken_over_by_user = relationship("StaffUser", back_populates="taken_sessions")
-    logs = relationship("LogEntry", back_populates="session")
