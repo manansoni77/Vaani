@@ -1,0 +1,153 @@
+input dept_id = 3
+
+first request
+
+Request URL
+https://ipgrs.karnataka.gov.in/knowlegde/GetServicelist?dept=3
+Request Method
+GET
+Status Code
+200 OK
+Remote Address
+103.138.196.141:443
+Referrer Policy
+strict-origin-when-cross-origin
+
+response
+[
+    {
+        "sk_serviceId": 10,
+        "sk_serviceName_eng": "Atalji Janasnehi Kendra (AJSK)",
+        "sk_serviceName_kan": "ಅಟಲ್ ಜಿ ಜನಸ್ನೇಹಿ ಕೇಂದ್ರ ಯೋಜನೆ",
+        "sk_dk_deptId": 3,
+        "sk_is_active": true,
+        "sk_created_on": "\/Date(1664198032963)\/",
+        "sk_updated_by": null,
+        "sk_updated_on": null,
+        "sk_created_by": null
+    }, ...
+]
+
+second request
+
+Request URL
+https://ipgrs.karnataka.gov.in/knowlegde/GetServiceScheme?dept=3&line_dept=10
+Request Method
+GET
+Status Code
+200 OK
+Remote Address
+103.138.196.141:443
+Referrer Policy
+strict-origin-when-cross-origin
+
+response
+[
+    {
+        "dk_deptId": 0,
+        "dk_deptName_eng": null,
+        "dk_deptName_kan": null,
+        "dk_is_active": null,
+        "dk_created_on": null,
+        "dk_updated_by": null,
+        "dk_updated_on": null,
+        "dk_created_by": null,
+        "kd_kId": 0,
+        "kd_officer_eng": null,
+        "kd_officer_kan": null,
+        "kd_Procedure_eng": null,
+        "kd_Procedure_kan": null,
+        "kd_Prescribed_eng": null,
+        "kd_Prescribed_kan": null,
+        "kd_Eligibility_eng": null,
+        "kd_Eligibility_kan": null,
+        "kd_Document_eng": null,
+        "kd_Document_kan": null,
+        "kd_schemeId": null,
+        "kd_is_active": null,
+        "kd_created_on": null,
+        "kd_updated_by": null,
+        "kd_updated_on": null,
+        "kd_created_by": null,
+        "sk_schemeId": 90,
+        "sk_schemeName_eng": "RTC/Pahani",
+        "sk_schemeName_kan": "ಆರ್‌ಟಿಸಿ/ಪಹಣಿ ಸೇವೆ  ಒದಗಿಸುವುದು",
+        "sk_sk_serviceId": null,
+        "sk_is_active": null,
+        "sk_created_on": null,
+        "sk_updated_by": null,
+        "sk_updated_on": null,
+        "sk_created_by": null,
+        "sk_serviceId": 0,
+        "sk_serviceName_eng": null,
+        "sk_serviceName_kan": null,
+        "sk_dk_deptId": null,
+        "ResultId": null,
+        "Result": null,
+        "ResultEng": null,
+        "Resultkan": null
+    }, ...]
+
+third request
+
+Request URL
+https://ipgrs.karnataka.gov.in/knowlegde/KnowledgebasedReportList
+Request Method
+POST
+Status Code
+200 OK
+Remote Address
+103.138.196.141:443
+Referrer Policy
+strict-origin-when-cross-origin
+
+body
+dept=3&service=10&scheme=91
+
+response
+[
+    {
+        "dk_deptId": 3,
+        "dk_deptName_eng": "Revenue Department",
+        "dk_deptName_kan": "ಕಂದಾಯ ಇಲಾಖೆ",
+        "dk_is_active": true,
+        "dk_created_on": "\/Date(1664197691473)\/",
+        "dk_updated_by": null,
+        "dk_updated_on": null,
+        "dk_created_by": null,
+        "kd_kId": 0,
+        "kd_officer_eng": "→Taluk Office Pahani center/ Nadakacheri (Hobli)/ Spandana center (DC Office)/IRTC  (Online)\u003cbr/\u003e",
+        "kd_officer_kan": "→ತಾಲ್ಲೂಕು ತಹಸೀಲ್ದಾರ್ ಕಛೇರಿ ಪಹಣಿ ಕೇಂದ್ರ / ಹೋಬಳಿ ನಾಡಕಛೇರಿ/ ಸ್ಪಂದನ ಕೇಂದ್ರ ಜಿಲ್ಲಾಧಿಕಾರಿಗಳ ಕಛೇರಿ/ ಆನ್‌ ಲೈನ್‌ ಮುಖಾಂತರವು ಪಹಣಿಯನ್ನು ಪಡೆಯಬಹುದು.\u003cbr/\u003e",
+        "kd_Procedure_eng": "→Visit the Taluk Office /Nadakacheri/Spandana Center or Available Online also ( IRTC)\u003cbr/\u003e",
+        "kd_Procedure_kan": "→ತಾಲ್ಲೂಕು ತಹಸೀಲ್ದಾರ್ಕಛೇರಿ/ ಹೋಬಳಿ ನಾಢಕಛೇರಿ/ ಸ್ಪಂದನ ಕೇಂದ್ರ ಜಿಲ್ಲಾಧಿಕಾರಿಗಳ ಕಛೇರಿ/ ಆನ್‌ ಲೈನ್‌ ಮುಖಾಂತರವು ಪಹಣಿಯನ್ನು ಪಡೆಯಬಹುದು.\u003cbr/\u003e",
+        "kd_Prescribed_eng": "→Not applicable\u003cbr/\u003e",
+        "kd_Prescribed_kan": "→ಅನ್ವಯಿಸುವುದಿಲ್ಲ\u003cbr/\u003e",
+        "kd_Eligibility_eng": "→Not applicable\u003cbr/\u003e",
+        "kd_Eligibility_kan": "→ಅನ್ವಯಿಸುವುದಿಲ್ಲ\u003cbr/\u003e",
+        "kd_Document_eng": "→Not Applicable\u003cbr/\u003e",
+        "kd_Document_kan": "→ಅನ್ವಯಿಸುವುದಿಲ್ಲ\u003cbr/\u003e",
+        "kd_schemeId": 91,
+        "kd_is_active": null,
+        "kd_created_on": null,
+        "kd_updated_by": null,
+        "kd_updated_on": null,
+        "kd_created_by": null,
+        "sk_schemeId": 91,
+        "sk_schemeName_eng": "Land Mutation",
+        "sk_schemeName_kan": "ಭೂ ಮ್ಯುಟೇಷನ್‌ ಸೇವೆ",
+        "sk_sk_serviceId": 10,
+        "sk_is_active": true,
+        "sk_created_on": "\/Date(1664198540160)\/",
+        "sk_updated_by": null,
+        "sk_updated_on": null,
+        "sk_created_by": null,
+        "sk_serviceId": 10,
+        "sk_serviceName_eng": "Bhoomi Monitoring Cell",
+        "sk_serviceName_kan": "ಭೂಮಾಪನ ಕಂದಾಯ ವ್ಯವಸ್ಥೆ ಮತ್ತು ಭೂದಾಖಲೆಗಳ ಇಲಾಖೆ",
+        "sk_dk_deptId": 3,
+        "ResultId": null,
+        "Result": null,
+        "ResultEng": null,
+        "Resultkan": null
+    }
+]

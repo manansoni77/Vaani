@@ -1,8 +1,12 @@
+import os
+from pathlib import Path
+
 from dotenv import load_dotenv
 
-load_dotenv()
-
-import os
+# Always load the backend-local `.env`, regardless of the current working directory.
+# This fixes ingestion scripts (run from `Scripts/ingestion/`) not picking up backend env vars.
+_ENV_PATH = Path(__file__).resolve().parent / ".env"
+load_dotenv(dotenv_path=_ENV_PATH)
 
 PRERECORDED_DIR = os.path.join(os.path.dirname(__file__), "prerecorded")
 
@@ -37,3 +41,16 @@ GOOGLE_CLIENT_ID = os.getenv("GOOGLE_CLIENT_ID")                       # Google 
 JWT_SECRET       = os.getenv("JWT_SECRET", "change-me-in-production")  # HMAC secret for signing app JWTs
 JWT_ALGORITHM    = "HS256"
 JWT_EXPIRE_SECS  = int(os.getenv("JWT_EXPIRE_SECS", "3600"))
+
+# Pinecone
+PINECONE_API_KEY = os.getenv("PINECONE_API_KEY")
+PINECONE_INDEX_NAME = os.getenv("PINECONE_INDEX_NAME", "vaani")
+PINECONE_REGION = os.getenv("PINECONE_REGION") or os.getenv("PINECONE_ENVIRONMENT") or "us-east-1"
+EMBEDDING_MODEL = os.getenv("EMBEDDING_MODEL", "text-embedding-3-small")
+
+# Ingestion & Retrieval
+UPSERT_BATCH_SIZE = int(os.getenv("UPSERT_BATCH_SIZE", "100"))
+OPENAI_API_KEY = os.getenv("OPENAI_API_KEY") or os.getenv("OPENAI_KEY")
+EMBEDDING_DIM = int(os.getenv("EMBEDDING_DIM", "1536"))
+TOP_K = int(os.getenv("TOP_K", "3"))
+SCORE_THRESHOLD = float(os.getenv("SCORE_THRESHOLD", "0.75"))
