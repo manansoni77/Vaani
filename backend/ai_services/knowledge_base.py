@@ -1,7 +1,7 @@
 import logging
 from typing import List
 
-from .retrieval import retrieve
+from services.retrieval import retrieve
 
 log = logging.getLogger(__name__)
 
