@@ -8,10 +8,10 @@ from google.oauth2 import id_token
 from pydantic import BaseModel
 from sqlalchemy.orm import Session
 
-from config import GOOGLE_CLIENT_ID, JWT_ALGORITHM, JWT_EXPIRE_SECS, JWT_SECRET
-from constants import ROLE_TYPE
-from database import StaffUser, get_engine
-from loggers import LOG_ENTITIES, get_logger
+from ..config import GOOGLE_CLIENT_ID, JWT_ALGORITHM, JWT_EXPIRE_SECS, JWT_SECRET
+from ..constants import ROLE_TYPE
+from ..database import StaffUser, get_engine
+from ..loggers import LOG_ENTITIES, get_logger
 
 router = APIRouter(prefix="/auth", tags=["auth"])
 _log = get_logger(LOG_ENTITIES.APP)

@@ -1,6 +1,6 @@
-from ai_services.stt_tts.base import BaseSTTClient, BaseTTSClient
-from ai_services.stt_tts.sarvam import SarvamSTTClient, SarvamTTSClient
-from config import SARVAM_API_KEY, STT_PROVIDER, TTS_PROVIDER
+from .base import BaseSTTClient, BaseTTSClient
+from .sarvam import SarvamSTTClient, SarvamTTSClient
+from ...config import SARVAM_API_KEY, STT_PROVIDER, TTS_PROVIDER
 
 
 def get_caller_stt_client() -> BaseSTTClient | None:

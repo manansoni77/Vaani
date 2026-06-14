@@ -2,7 +2,7 @@ from sqlalchemy import Boolean, Column, Enum, Float, ForeignKey, Integer, String
 from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.orm import relationship
 from .engine import Base
-from constants import ROLE_TYPE
+from ..constants import ROLE_TYPE
 
 
 class Department(Base):

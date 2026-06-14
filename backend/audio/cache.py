@@ -1,7 +1,7 @@
 import io
 import os
 import wave
-from config import PRERECORDED_DIR, PCM_CHUNK_SIZE
+from ..config import PRERECORDED_DIR, PCM_CHUNK_SIZE
 from .phrases import PRERECORDED_AUDIO
 
 

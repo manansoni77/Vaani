@@ -7,16 +7,16 @@ from fastapi import APIRouter, Depends, HTTPException, Query, WebSocket, WebSock
 from pydantic import BaseModel
 from sqlalchemy.orm import Session
 
-from database import CallSessionRecord, Department, Ticket, get_engine
-from constants import QUERY_TYPE, ROLE_TYPE
-from sessions import (
+from ..database import CallSessionRecord, Department, Ticket, get_engine
+from ..constants import QUERY_TYPE, ROLE_TYPE
+from ..sessions import (
     HumanAgentSession,
     SessionBroadcaster,
     get_call,
     register_human,
     unregister_human,
 )
-from loggers import get_logger, LOG_ENTITIES
+from ..loggers import get_logger, LOG_ENTITIES
 from .auth import get_current_user, require_roles
 
 router = APIRouter(prefix="/sessions", tags=["sessions"])

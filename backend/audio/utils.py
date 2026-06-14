@@ -2,7 +2,7 @@ import array
 import asyncio
 import io
 import wave
-from config import (
+from ..config import (
     PCM_SAMPLE_RATE,
     R2_ACCESS_KEY_ID,
     R2_ACCOUNT_ID,

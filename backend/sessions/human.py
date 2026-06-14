@@ -3,8 +3,8 @@ import json
 
 from fastapi import WebSocket, WebSocketDisconnect
 
-from ai_services.stt_tts import get_agent_stt_client
-from loggers import get_logger, LOG_ENTITIES
+from ..ai_services.stt_tts import get_agent_stt_client
+from ..loggers import get_logger, LOG_ENTITIES
 
 
 class HumanAgentSession:

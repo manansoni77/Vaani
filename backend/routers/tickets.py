@@ -7,8 +7,8 @@ from sqlalchemy import or_
 from sqlalchemy.orm import Session
 from sqlalchemy.orm.attributes import flag_modified
 
-from database import CallSessionRecord, Department, Ticket, get_engine
-from constants import ROLE_TYPE
+from ..database import CallSessionRecord, Department, Ticket, get_engine
+from ..constants import ROLE_TYPE
 from .auth import get_current_user, require_roles
 
 router = APIRouter(prefix="/tickets", tags=["tickets"])
