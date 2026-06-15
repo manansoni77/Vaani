@@ -1,7 +1,7 @@
 import json
 from pathlib import Path
 
-from clean import clean_record
+from .clean import clean_record
 
 _FIELD_MAP = {
     "dept_id": "dept_id",

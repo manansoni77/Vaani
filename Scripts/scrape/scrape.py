@@ -4,8 +4,8 @@ from pathlib import Path
 
 import requests
 import urllib3
-from department import DEPARTMENT_IDS
-from transform import add_metadata, save_knowledge_docs, to_canonical, to_nl_text
+from .department import DEPARTMENT_IDS
+from .transform import add_metadata, save_knowledge_docs, to_canonical, to_nl_text
 
 urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
 

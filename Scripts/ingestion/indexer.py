@@ -5,7 +5,7 @@ from typing import List
 from .embedder import embed_texts
 from .pinecone_client import get_index
 
-from backend.config import UPSERT_BATCH_SIZE
+from config import UPSERT_BATCH_SIZE
 
 log = logging.getLogger(__name__)
 

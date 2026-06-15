@@ -3,7 +3,7 @@ import os
 from typing import List
 
 from openai import APIConnectionError, DefaultHttpxClient, OpenAI
-from backend.config import OPENAI_API_KEY, EMBEDDING_MODEL
+from config import OPENAI_API_KEY, EMBEDDING_MODEL
 
 
 

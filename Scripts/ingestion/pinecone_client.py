@@ -4,7 +4,7 @@ import urllib3
 import os
 
 from pinecone import Pinecone, ServerlessSpec
-from backend.config import PINECONE_API_KEY, PINECONE_INDEX_NAME, PINECONE_REGION, EMBEDDING_DIM
+from config import PINECONE_API_KEY, PINECONE_INDEX_NAME, PINECONE_REGION, EMBEDDING_DIM
 
 try:
     import certifi

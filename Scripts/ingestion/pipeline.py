@@ -12,8 +12,8 @@ logging.basicConfig(
 )
 log = logging.getLogger("pipeline")
 
-# path to the JSONL produced by transform.py → save_knowledge_docs()
-KNOWLEDGE_JSONL = Path(__file__).resolve().parents[2] / "Scripts/scrape/output/knowledge_docs.jsonl"
+# path to the JSONL produced by run_scrape.py
+KNOWLEDGE_JSONL = Path(__file__).resolve().parent.parent / "scrape" / "output" / "knowledge_docs.jsonl"
 
 
 def run(reindex: bool = False) -> None:
@@ -21,7 +21,7 @@ def run(reindex: bool = False) -> None:
 
     if not KNOWLEDGE_JSONL.exists():
         log.error(f"Input file not found: {KNOWLEDGE_JSONL}")
-        log.error("Run the scraper first: python -m scripts.scrape.transform")
+        log.error("Run the scraper first: python run_scrape.py")
         exit(1)
 
     if reindex:
