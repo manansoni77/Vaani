@@ -1,5 +1,5 @@
 from sqlalchemy.orm import Session
-from ..loggers import get_logger, LOG_ENTITIES
+from loggers import get_logger, LOG_ENTITIES
 from .engine import get_engine
 from .models import CallSessionRecord, Caller, Ticket
 

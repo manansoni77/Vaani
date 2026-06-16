@@ -4,8 +4,8 @@ from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel
 from sqlalchemy.orm import Session
 
-from ..database import Department, get_engine
-from ..constants import ROLE_TYPE
+from database import Department, get_engine
+from constants import ROLE_TYPE
 from .auth import get_current_user, require_roles
 
 router = APIRouter(prefix="/departments", tags=["departments"])

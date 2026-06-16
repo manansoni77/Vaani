@@ -1,6 +1,6 @@
 from typing import List
 from pydantic import BaseModel, Field
-from ..constants import SENTIMENT, QUERY_TYPE, SERVICE_TYPE
+from constants import SENTIMENT, QUERY_TYPE, SERVICE_TYPE
 
 
 class SemanticMemory(BaseModel):

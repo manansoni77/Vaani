@@ -1,6 +1,6 @@
 import logging
 from datetime import datetime, timezone
-from ..config import DB_URL
+from config import DB_URL
 from sqlalchemy.orm import Session
 class LogFormat(logging.Formatter):
     def format(self, record: logging.LogRecord) -> str:
@@ -12,7 +12,7 @@ class LogFormat(logging.Formatter):
 
 class DBHandler(logging.Handler):
     def emit(self, record: logging.LogRecord) -> None:
-        from ..database import get_engine, LogEntry
+        from database import get_engine, LogEntry
         ts = datetime.now(timezone.utc).isoformat(timespec="milliseconds")
         entity = getattr(record, "entity", record.name)
         raw_sid = getattr(record, "session_id", None)

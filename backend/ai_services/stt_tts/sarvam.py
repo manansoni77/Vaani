@@ -5,7 +5,7 @@ from collections.abc import AsyncGenerator, Awaitable, Callable
 from sarvamai import AsyncSarvamAI, AudioOutput, EventResponse
 
 from .base import BaseSTTClient, BaseTTSClient
-from ...config import PCM_SAMPLE_RATE, SARVAM_API_KEY, SARVAM_SPEAKER_PROFILE
+from config import PCM_SAMPLE_RATE, SARVAM_API_KEY, SARVAM_SPEAKER_PROFILE
 
 
 class SarvamSTTClient(BaseSTTClient):

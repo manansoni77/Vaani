@@ -1,6 +1,6 @@
 import os
 from openai import AsyncOpenAI
-from ..loggers import get_logger, LOG_ENTITIES
+from loggers import get_logger, LOG_ENTITIES
 
 _default_log = get_logger(LOG_ENTITIES.OPENAI_LLM)
 

@@ -2,7 +2,7 @@ from sqlalchemy import JSON, create_engine
 from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.orm import DeclarativeBase
 
-from ..config import DB_URL
+from config import DB_URL
 
 
 class Base(DeclarativeBase):

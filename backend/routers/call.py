@@ -3,7 +3,7 @@ import uuid
 
 from fastapi import APIRouter, WebSocket
 
-from ..sessions import CallSession, register_call, unregister_call
+from sessions import CallSession, register_call, unregister_call
 
 router = APIRouter()
 

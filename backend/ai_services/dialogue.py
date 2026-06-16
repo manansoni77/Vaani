@@ -1,10 +1,10 @@
 from typing import cast
 from .llm import LLMClient
-from ..constants import PHASE
+from constants import PHASE
 from .schemas import CaptureAndValidationResponse, SemanticMemory
 from .prompts import PROMPTS
 from .knowledge_base import fetch_kb_results
-from ..loggers import get_logger, LOG_ENTITIES
+from loggers import get_logger, LOG_ENTITIES
 
 llm_client = LLMClient()
 
@@ -61,7 +61,7 @@ class DialogueFlow:
         # transition immediately so we don't have to route the first user message specially
         yield "Hello! Thank you for calling Vaani. How can I assist you today?"
 
-    async def get_response(self, input_text):
+    async def get_response(self, input_text, history: list[dict] | None = None):
         if self.phase == PHASE.COMPLETE:
             self.log.info("get_response called in COMPLETE phase — ignoring")
 
@@ -79,6 +79,7 @@ class DialogueFlow:
                     "kn-IN": "ಕ್ಷಮಿಸಿ, ನಿಮ್ಮ ಸಮಸ್ಯೆಯನ್ನು ನಾನು ಅರ್ಥಮಾಡಿಕೊಳ್ಳಲು ಕಷ್ಟಪಡುತ್ತಿದ್ದೇನೆ. ದಯವಿಟ್ಟು ಕಾಯಿರಿ, ನಾನು ನಿಮಗೆ ಉತ್ತಮ ಸಹಾಯಕ್ಕಾಗಿ ಮಾನವ ಏಜೆಂಟ್‌ಗೆ ಸಂಪರ್ಕಿಸುತ್ತಿದ್ದೇನೆ.",
                 }
                 yield response.get(self.semantic_memory.user_language, response["en-IN"])
+            return
 
         prompt_fn = PROMPTS[self.phase]
 
@@ -96,7 +97,7 @@ class DialogueFlow:
                 f"phase=CAPTURE turn={self.turns + 1} input={input_text!r} lang={self.semantic_memory.user_language!r}"
             )
             kb_results = await fetch_kb_results(input_text)
-            prompt = prompt_fn(input_text, self.semantic_memory, kb_results=kb_results)
+            prompt = prompt_fn(input_text, self.semantic_memory, kb_results=kb_results, history=history)
             response = cast(
                 CaptureAndValidationResponse,
                 await llm_client.get_json_response(
@@ -151,7 +152,7 @@ class DialogueFlow:
                 f"phase=VALIDATION input={input_text!r} lang={self.semantic_memory.user_language!r}"
             )
             kb_results = await fetch_kb_results(self.semantic_memory.summary or input_text)
-            prompt = prompt_fn(input_text, self.semantic_memory, kb_results=kb_results)
+            prompt = prompt_fn(input_text, self.semantic_memory, kb_results=kb_results, history=history)
             response = cast(
                 CaptureAndValidationResponse,
                 await llm_client.get_json_response(

@@ -4,7 +4,7 @@ from typing import List
 from openai import OpenAI
 from pinecone import Pinecone
 
-from ..config import (
+from config import (
     OPENAI_API_KEY,
     PINECONE_API_KEY,
     PINECONE_INDEX_NAME,
