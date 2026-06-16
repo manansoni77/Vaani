@@ -134,9 +134,12 @@ class DialogueFlow:
 
             if self.turns >= self.max_turns or not response.follow_up:
                 if _not_red(response.system_score):
-                    yield response.response
                     self.phase = PHASE.VALIDATION
-                    self.log.info("phase transitioning to VALIDATION based on follow_up=false")
+                    self.log.info(
+                        "follow_up=false — transitioning to VALIDATION and asking confirmation inline"
+                    )
+                    async for chunk in self._start_validation(input_text, history):
+                        yield chunk
                 elif _is_red(response.system_score):
                     escalate = {
                         "hi-IN": "मुझे खेद है, मैं आपकी समस्या को समझ नहीं पा रहा हूँ। कृपया मुझे एक पल दें, मैं आपको एक मानव एजेंट से जोड़ता हूँ।",
@@ -196,3 +199,33 @@ class DialogueFlow:
                     # User denied or was unclear - stay in VALIDATION and ask again
                     self.log.info("User denied or unclear - staying in VALIDATION for follow-up")
                     yield response.response
+
+    async def _start_validation(self, input_text: str, history: list[dict] | None = None):
+        """
+        Called inline when CAPTURE finishes (follow_up=false, system_score not red).
+        Runs the VALIDATION prompt immediately so the user gets the confirmation
+        question in the same turn, instead of a closing statement followed by a
+        silent gap until they speak again. Sets first_validate=False so the next
+        user reply goes straight to the reiterate/confirm check.
+        """
+        validation_prompt_fn = PROMPTS[PHASE.VALIDATION]
+        kb_results = await fetch_kb_results(self.semantic_memory.summary or input_text)
+        prompt = validation_prompt_fn(
+            input_text, self.semantic_memory, kb_results=kb_results, history=history
+        )
+        response = cast(
+            CaptureAndValidationResponse,
+            await llm_client.get_json_response(
+                system_prompt=prompt[0],
+                user_prompt=prompt[1],
+                response_format=CaptureAndValidationResponse,
+                log=self.llm_log,
+            ),
+        )
+        self.system_score = response.system_score
+        self.user_score = response.user_score
+        self.first_validate = False
+        self.log.info(
+            f"inline VALIDATION ask — system={self.system_score:.2f} user={self.user_score:.2f}"
+        )
+        yield response.response
