@@ -1,5 +1,10 @@
+import logging
 import random
 from typing import List
+
+from .retrieval import retrieve
+
+log = logging.getLogger(__name__)
 
 _KB: dict[str, List[str]] = {
     "lpg": [
@@ -59,13 +64,60 @@ def _keyword_match(query: str) -> List[str]:
     return _KB["default"]
 
 
+def _format_result_as_passage(result: dict) -> str:
+    if not result:
+        return ""
+
+    lines = []
+
+    title = []
+    if result.get("scheme_eng"):
+        title.append(result["scheme_eng"])
+    if result.get("service_eng"):
+        title.append(result["service_eng"])
+    if result.get("department_eng"):
+        title.append(result["department_eng"])
+
+    if title:
+        lines.append(" - ".join(title))
+
+    for label, key in [
+        ("Procedure", "procedure_eng"),
+        ("Eligibility", "eligibility_eng"),
+        ("Required Documents", "documents_eng"),
+        ("Contact Officer", "officer_eng"),
+        ("Prescribed Information", "prescribed_eng"),
+    ]:
+        value = result.get(key)
+        if value:
+            lines.append(f"{label}: {value}")
+
+    if not lines:
+        metadata_text = ", ".join(
+            f"{k}={v}" for k, v in result.items() if k not in {"score", "id"} and isinstance(v, str)
+        )
+        return metadata_text or ""
+
+    return "\n".join(lines)
+
+
 async def fetch_kb_results(query: str) -> List[str]:
     """
-    Mock knowledge-base lookup. Simulates vector-store retrieval via keyword
-    matching. Returns up to 2 relevant passages.
-
-    Replace with a real embedding-based lookup (pgvector, Pinecone, Qdrant, etc.)
-    when a production KB is available.
+    Retrieve knowledge base passages using the production retrieval service.
+    Falls back to keyword matching if retrieval fails or returns no results.
     """
+    query = query.strip()
+    if not query:
+        return _KB["default"]
+
+    try:
+        docs = retrieve(query)
+        if docs:
+            passages = [p for p in (_format_result_as_passage(doc) for doc in docs) if p]
+            if passages:
+                return passages[:2]
+    except Exception:
+        log.warning("KB retrieval failed, falling back to keyword matcher")
+
     results = _keyword_match(query)
     return results[:2] if len(results) <= 2 else random.sample(results, 2)

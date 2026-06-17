@@ -4,7 +4,7 @@ from collections.abc import AsyncGenerator, Awaitable, Callable
 
 from sarvamai import AsyncSarvamAI, AudioOutput, EventResponse
 
-from ai_services.stt_tts.base import BaseSTTClient, BaseTTSClient
+from .base import BaseSTTClient, BaseTTSClient
 from config import PCM_SAMPLE_RATE, SARVAM_API_KEY, SARVAM_SPEAKER_PROFILE
 
 

@@ -1,0 +1,13 @@
+[project]
+name = "scripts"
+version = "0.1.0"
+description = "Vaani knowledge base scraping and ingestion scripts"
+requires-python = ">=3.10"
+dependencies = [
+    "certifi",
+    "openai>=2.33.0",
+    "pinecone>=9.1.0",
+    "python-dotenv>=1.0.0",
+    "requests>=2.31.0",
+    "urllib3",
+]

@@ -5,6 +5,17 @@ from .schemas import SemanticMemory
 PromptTuple = tuple[str, str]
 
 
+def _format_kb_context(kb_results: list[str]) -> str:
+    """Format knowledge base results for inclusion in prompts."""
+    if not kb_results:
+        return ""
+
+    context = "\n\n[RELEVANT INFORMATION FROM KNOWLEDGE BASE]:\n"
+    for i, result in enumerate(kb_results, 1):
+        context += f"{i}. {result}\n"
+    return context
+
+
 def _format_history(history: list[dict]) -> str:
     if not history:
         return ""
@@ -19,7 +30,7 @@ def greeting_prompt() -> PromptTuple:
     )
 
 
-def capture_prompt(input_text: str, semantic_memory: SemanticMemory, history: list[dict] = []) -> PromptTuple:
+def capture_prompt(input_text: str, semantic_memory: SemanticMemory, kb_results: list[str] | None = None, history: list[dict] | None = None) -> PromptTuple:
     return (
         f"""You are Vaani, a calm and helpful AI assistant for the 1092 helpline. The current phase is CAPTURE.
 The user is speaking in {semantic_memory.user_language}. You MUST reply ONLY in {semantic_memory.user_language}. Do NOT mix languages.
@@ -101,8 +112,12 @@ User: "When does the LPG cylinder become available in my area?"
 → query_type=ENQUIRY. Issue understood. follow_up=false, system_score=1.0.
 → response: "I understand you have a question about LPG cylinder availability. Let me note that down." (DO NOT answer the question itself)
 
-Always be calm, supportive, and natural. For emergency GRIEVANCE situations, be concise and reassuring.""",
-        f"{_format_history(history)}"
+Always be calm, supportive, and natural. For emergency GRIEVANCE situations, be concise and reassuring.
+
+If relevant knowledge base information is provided below, use it to provide context or guidance, but do not quote it directly to the user unless they specifically ask for details."""
+        + _format_kb_context(kb_results or []) + """
+""",
+        f"{_format_history(history or [])}"
         f"Current conversation summary: {semantic_memory.summary}\n"
         f"Query type identified so far: {semantic_memory.query_type}\n"
         f"Service type captured so far: {semantic_memory.service_type}\n"
@@ -112,7 +127,7 @@ Always be calm, supportive, and natural. For emergency GRIEVANCE situations, be 
     )
 
 
-def validation_prompt(input_text: str, semantic_memory: SemanticMemory, history: list[dict] = []) -> PromptTuple:
+def validation_prompt(input_text: str, semantic_memory: SemanticMemory, kb_results: list[str] | None = None, history: list[dict] | None = None) -> PromptTuple:
     return (
         f"""You are Vaani, a calm and helpful assistant for the 1092 helpline. The current phase is VALIDATION.
 The user is speaking in {semantic_memory.user_language}. You MUST reply ONLY in {semantic_memory.user_language}. Do NOT mix languages.
@@ -133,8 +148,12 @@ STRICT RULES:
 - Do not introduce new information.
 - End every response with a simple yes/no question about the ORIGINAL captured issue.
 - Keep responses short, clear, and conversational.
-- Do not ask new follow-up questions or collect additional details in this phase.""",
-        f"{_format_history(history)}"
+- Do not ask new follow-up questions or collect additional details in this phase.
+
+If relevant knowledge base information is provided below, you can optionally reference it briefly to show that their issue is recognized and you have relevant resources."""
+        + _format_kb_context(kb_results or []) + """
+""",
+        f"{_format_history(history or [])}"
         f"Captured summary: {semantic_memory.summary}\n"
         f"Identified Intent: {semantic_memory.intent}\n\n"
         f"Query type: {semantic_memory.query_type}\n"
