@@ -7,7 +7,8 @@
  */
 
 import { apiFetch } from "@/lib/apiClient";
-import type { Session, Ticket, TicketStatus, QueryType } from "@/lib/types";
+import { API_BASE } from "@/lib/config";
+import type { Session, Ticket, TicketStatus, QueryType, CallerTicket } from "@/lib/types";
 import type { RoleType } from "@/lib/userStore";
 
 // ============================================================================
@@ -227,6 +228,20 @@ export function updateTicketStatus(id: number, status: TicketStatus): Promise<Ti
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ status }),
   });
+}
+
+// ============================================================================
+// Caller (anonymous)
+// ============================================================================
+
+/**
+ * GET /caller/{phone}/tickets — returns all tickets for this phone number.
+ * No auth token required — uses a plain fetch against API_BASE.
+ */
+export async function getCallerTickets(phone: string): Promise<CallerTicket[]> {
+  const res = await fetch(`${API_BASE}/caller/${encodeURIComponent(phone)}/tickets`);
+  if (!res.ok) throw new Error(`${res.status}`);
+  return res.json() as Promise<CallerTicket[]>;
 }
 
 /** POST /tickets/{id}/comment — add a manual comment to a ticket. */

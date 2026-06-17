@@ -76,6 +76,21 @@ export interface Ticket {
 }
 
 // ---------------------------------------------------------------------------
+// Caller (anonymous) types
+// ---------------------------------------------------------------------------
+
+/** Ticket as seen by the caller — no auth required, phone-keyed. */
+export interface CallerTicket {
+  id: number;
+  status: string;
+  priority: string;
+  description: string | null;
+  created_at: string;
+  updated_at: string;
+  session_ids: string[];
+}
+
+// ---------------------------------------------------------------------------
 // Audit types
 // ---------------------------------------------------------------------------
 
