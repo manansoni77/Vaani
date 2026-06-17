@@ -9,7 +9,7 @@ import { SpinnerIcon } from "@/components/ui/icons";
 // Routes that don't require authentication
 // ---------------------------------------------------------------------------
 
-const PUBLIC_PATHS = ["/login"];
+const PUBLIC_PATHS = ["/login", "/", "/call"];
 
 // ---------------------------------------------------------------------------
 // AuthGuard
