@@ -5,7 +5,16 @@ from fastapi.middleware.cors import CORSMiddleware
 from config import R2_ACCOUNT_ID, R2_BUCKET_NAME
 from database import reset_tables
 from loggers import get_logger, setup_logging, LOG_ENTITIES
-from routers import auth_router, call_router, datasets_router, departments_router, logs_router, sessions_router, tickets_router, users_router
+from routers import (
+    auth_router,
+    call_router,
+    datasets_router,
+    departments_router,
+    logs_router,
+    sessions_router,
+    tickets_router,
+    users_router,
+)
 
 _app_log = get_logger(LOG_ENTITIES.APP)
 
@@ -27,7 +36,13 @@ app = FastAPI(lifespan=lifespan)
 
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["https://vaani.conceptforge.in", "http://localhost:3000"],
+    allow_origins=[
+        "http://localhost:3000",
+        "https://vaani.conceptforge.in",
+        "https://vaani.shipnyap.in",
+        "https://vaani02.conceptforge.in",
+        "https://vaani02.shipnyap.in",
+    ],
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
