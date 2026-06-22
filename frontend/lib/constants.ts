@@ -38,6 +38,7 @@ export const AUDIT_ENTITIES = [
   "OPENAI_LLM",
   "DIALOGUE_FLOW",
   "HUMAN_AGENT",
+  "KB_RETRIEVAL",
 ] as const;
 
 export const AUDIT_LEVELS = [
