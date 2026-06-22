@@ -16,7 +16,7 @@ class LogEntryOut(BaseModel):
     id: int
     level: str
     entity_type: str
-    session_id: str
+    session_id: str | None
     timestamp: str
     message: str
 
