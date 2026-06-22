@@ -1,4 +1,3 @@
-import logging
 from typing import List
 
 from openai import OpenAI
@@ -10,10 +9,10 @@ from config import (
     PINECONE_INDEX_NAME,
     EMBEDDING_MODEL,
     TOP_K,
-    SCORE_THRESHOLD,
 )
+from loggers import get_logger, LOG_ENTITIES
 
-log = logging.getLogger(__name__)
+log = get_logger(LOG_ENTITIES.KB_RETRIEVAL)
 
 _oa = None
 _index = None
@@ -70,6 +69,8 @@ def retrieve(query: str, top_k: int | None = None) -> List[dict]:
 
     query = query.strip()
 
+    log.info("Retrieving documents for query: '%s', top_k: %d", query, top_k)
+
     if not query:
         return []
 
@@ -84,11 +85,7 @@ def retrieve(query: str, top_k: int | None = None) -> List[dict]:
     results = []
 
     for match in response.matches:
-        if match.score < SCORE_THRESHOLD:
-            continue
-
         metadata = dict(match.metadata or {})
-
         results.append(
             {
                 **metadata,
@@ -96,6 +93,8 @@ def retrieve(query: str, top_k: int | None = None) -> List[dict]:
                 "id": match.id,
             }
         )
+
+    results.sort(key=lambda r: r["score"], reverse=True)
 
     log.info(
         "Retrieved %d documents for query '%s'",

@@ -106,16 +106,17 @@ async def fetch_kb_results(query: str) -> List[str]:
     Retrieve knowledge base passages using the production retrieval service.
     Falls back to keyword matching if retrieval fails or returns no results.
     """
+    log.info("Fetching KB results for query: '%s'", query)
     query = query.strip()
     if not query:
         return _KB["default"]
 
     try:
-        docs = retrieve(query)
+        docs = retrieve(query, 5)
         if docs:
             passages = [p for p in (_format_result_as_passage(doc) for doc in docs) if p]
             if passages:
-                return passages[:2]
+                return passages
     except Exception:
         log.warning("KB retrieval failed, falling back to keyword matcher")
 
