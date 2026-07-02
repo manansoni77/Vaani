@@ -30,7 +30,12 @@ def greeting_prompt() -> PromptTuple:
     )
 
 
-def capture_prompt(input_text: str, semantic_memory: SemanticMemory, kb_results: list[str] | None = None, history: list[dict] | None = None) -> PromptTuple:
+def capture_prompt(
+    input_text: str,
+    semantic_memory: SemanticMemory,
+    kb_results: list[str] | None = None,
+    history: list[dict] | None = None,
+) -> PromptTuple:
     return (
         f"""You are Vaani, a calm and helpful AI assistant for the 1092 helpline. The current phase is CAPTURE.
 The user is speaking in {semantic_memory.user_language}. You MUST reply ONLY in {semantic_memory.user_language}. Do NOT mix languages.
@@ -115,7 +120,8 @@ User: "When does the LPG cylinder become available in my area?"
 Always be calm, supportive, and natural. For emergency GRIEVANCE situations, be concise and reassuring.
 
 If relevant knowledge base information is provided below, use it to provide context or guidance, but do not quote it directly to the user unless they specifically ask for details."""
-        + _format_kb_context(kb_results or []) + """
+        + _format_kb_context(kb_results or [])
+        + """
 """,
         f"{_format_history(history or [])}"
         f"Current conversation summary: {semantic_memory.summary}\n"
@@ -127,7 +133,24 @@ If relevant knowledge base information is provided below, use it to provide cont
     )
 
 
-def validation_prompt(input_text: str, semantic_memory: SemanticMemory, kb_results: list[str] | None = None, history: list[dict] | None = None) -> PromptTuple:
+def validation_prompt(
+    input_text: str,
+    semantic_memory: SemanticMemory,
+    kb_results: list[str] | None = None,
+    history: list[dict] | None = None,
+) -> PromptTuple:
+    kb_context = _format_kb_context(kb_results or [])
+
+    no_kb_instruction = ""
+    if not kb_results:
+        no_kb_instruction = """
+NO KNOWLEDGE BASE DOCUMENTS FOUND:
+- If no relevant documents were retrieved for this issue, you MUST respond with the following message ONLY:
+  "I don't have this information right now. Human representative will reach out to you soon. Thank you for your patience."
+- Do NOT ask any confirmation questions or try to confirm the issue.
+- Set reiterate=false and end the interaction.
+"""
+
     return (
         f"""You are Vaani, a calm and helpful assistant for the 1092 helpline. The current phase is VALIDATION.
 The user is speaking in {semantic_memory.user_language}. You MUST reply ONLY in {semantic_memory.user_language}. Do NOT mix languages.
@@ -148,10 +171,11 @@ STRICT RULES:
 - Do not introduce new information.
 - End every response with a simple yes/no question about the ORIGINAL captured issue.
 - Keep responses short, clear, and conversational.
-- Do not ask new follow-up questions or collect additional details in this phase.
+- Do not ask new follow-up questions or collect additional details in this phase.{no_kb_instruction}
 
 If relevant knowledge base information is provided below, you can optionally reference it briefly to show that their issue is recognized and you have relevant resources."""
-        + _format_kb_context(kb_results or []) + """
+        + kb_context
+        + """
 """,
         f"{_format_history(history or [])}"
         f"Captured summary: {semantic_memory.summary}\n"
@@ -164,14 +188,18 @@ If relevant knowledge base information is provided below, you can optionally ref
     )
 
 
-def grievance_resolution_prompt(input_text: str, semantic_memory: SemanticMemory) -> PromptTuple:
+def grievance_resolution_prompt(
+    input_text: str, semantic_memory: SemanticMemory
+) -> PromptTuple:
     return (
         f"""You are a helpful assistant named Vaani. The user is speaking in {semantic_memory.user_language}. You MUST reply ONLY in {semantic_memory.user_language}. Do NOT mix languages. Always respond in the same language as the user. Based on the user's response of yes or no, if yes, acknowledge their task and reassure them that you will handle it. If no, tell them they will be connected to a human agent shortly.""",
         f"Conversation so far: {semantic_memory.summary}\n\nUser: {input_text}",
     )
 
 
-def redirect_clarification_prompt(input_text: str, dept_name: str, semantic_memory: SemanticMemory) -> PromptTuple:
+def redirect_clarification_prompt(
+    input_text: str, dept_name: str, semantic_memory: SemanticMemory
+) -> PromptTuple:
     return (
         f"""You are Vaani, a helpful assistant for the 1092 helpline. The current phase is REDIRECT.
 The user is speaking in {semantic_memory.user_language}. You MUST reply ONLY in {semantic_memory.user_language}. Do NOT mix languages.
@@ -196,7 +224,10 @@ Keep your response short and natural.""",
 
 
 def enquiry_resolution_prompt(
-    query: str, kb_results: List[str], semantic_memory: SemanticMemory, history: list[dict] = []
+    query: str,
+    kb_results: List[str],
+    semantic_memory: SemanticMemory,
+    history: list[dict] = [],
 ) -> PromptTuple:
     kb_text = "\n".join(f"{i + 1}. {r}" for i, r in enumerate(kb_results))
     return (
